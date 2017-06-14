@@ -189,7 +189,7 @@ class SeaLionData(object):
             # jpeg compression artifacts
             dot_img = self._load_image('dotted', train_id, border).astype(np.uint16).sum(axis=-1)
             img = np.copy(img)
-            img[dot_img<40] = 0
+            img[dot_img < 32] = 0
         return img
 
     def load_dotted_image(self, train_id, border=0):
@@ -251,7 +251,7 @@ class SeaLionData(object):
             for cnt in contours :
                 p = Polygon(shell=cnt)
                 area = p.area 
-                if (area > MIN_AREA and area < MAX_AREA):
+                if area > MIN_AREA and area < MAX_AREA:
                     y, x = p.centroid.coords[0]  # DANGER : skimage and cv2 coordinates transposed?
                     x = int(round(x))
                     y = int(round(y))
