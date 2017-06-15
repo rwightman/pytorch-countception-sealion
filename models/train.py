@@ -34,9 +34,9 @@ def main():
 
     dataset = SealionDataset(train_input_root, train_target_root, train_counts_file)
 
-    input, target = dataset[0]
+    for x in range(20):
+        input, target = dataset[x]
 
-    print(input.shape, target.shape)
 
 
 
