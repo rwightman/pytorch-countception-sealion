@@ -1,6 +1,7 @@
 from PIL import Image
 from collections import defaultdict, OrderedDict
 import cv2
+import torch
 import torch.utils.data as data
 from torchvision import datasets, transforms
 import random
@@ -10,7 +11,6 @@ import os
 import functools
 import time
 from contextlib import contextmanager
-
 
 
 IMG_EXTENSIONS = ['.jpg', '.jpeg', '.png']
@@ -39,7 +39,7 @@ def get_crop_size(target_w, target_h, angle, scale):
         crop_h = 2 * np.max(np.abs(rotated_corners[1, :]))
     crop_w = int(np.ceil(crop_w / scale))
     crop_h = int(np.ceil(crop_h / scale))
-    print(crop_w, crop_h)
+    #print(crop_w, crop_h)
     return crop_w, crop_h
 
 
@@ -63,6 +63,7 @@ def crop_around(img, cx, cy, crop_w, crop_h):
         trunc_bottom = bottom - img_h
         bottom = img_h
     if trunc_left or trunc_right or trunc_top or trunc_bottom:
+        print('truncated')
         img_new = np.zeros((crop_h, crop_w, img.shape[2]), dtype=img.dtype)
         trunc_bottom = crop_h - trunc_bottom
         trunc_right = crop_w - trunc_right
@@ -70,6 +71,15 @@ def crop_around(img, cx, cy, crop_w, crop_h):
         return img_new
     else:
         return img[top:bottom, left:right]
+
+
+def to_tensor(arr):
+    assert(isinstance(arr, np.ndarray))
+    t = torch.from_numpy(arr.transpose((2, 0, 1)))
+    print(t.size())
+    if isinstance(t, torch.ByteTensor):
+        return t.float().div(255)
+    return t
 
 
 def find_inputs(folder, types=IMG_EXTENSIONS):
@@ -151,7 +161,7 @@ class SealionDataset(data.Dataset):
         counts_df = pd.read_csv(counts_file)
         counts = counts_df.to_records()
 
-        inputs = find_inputs(input_root, types=['.npy'])
+        inputs = find_inputs(input_root, types=['.jpg'])
         if len(inputs) == 0:
             raise(RuntimeError("Found 0 images in : " + input_root))
 
@@ -164,35 +174,37 @@ class SealionDataset(data.Dataset):
         self.transform = transform
         self.target_transform = target_transform
 
-    @functools.lru_cache(128)
+    #@functools.lru_cache(128)
     def _load_input(self, index):
         input_id, path = self.inputs[index]
+        print("Loading %s" % path)
         if os.path.splitext(path)[1] == '.npy':
-            img = np.load(path, mmap_mode='r')
+            img = np.load(path) #, mmap_mode='r')
         else:
-            img = Image.open(path).convert('RGB')
+            img = cv2.imread(path)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         return img, input_id
 
-    @functools.lru_cache(128)
+    #@functools.lru_cache(128)
     def _load_target(self, input_id):
         target = None
         if input_id in self.targets:
-            #tp = [Image.open(self.targets[input_id][x]) for x in range(5)]
             tp = [cv2.imread(self.targets[input_id][x], -1) for x in range(5)]
             target = np.dstack(tp)
             target = target / np.iinfo(np.uint16).max
+            target = target.astype(np.float32, copy=False)
         return target
 
     def _random_tile_center(self, bbox):
         # return random center coords for specified tile size within a specified (x, y, w, h) bounding box
         x_min = bbox[0]
-        x_max = bbox[0] + bbox[2] #w
+        x_max = bbox[0] + bbox[2]
         y_min = bbox[1]
         y_max = bbox[1] + bbox[3]
-        x_min += int(np.floor(self.tile_size[0] / 2))
-        x_max -= int(np.ceil(self.tile_size[0] / 2))
-        y_min += int(np.floor(self.tile_size[1] / 2))
-        y_max -= int(np.ceil(self.tile_size[1] / 2))
+        x_min += self.tile_size[0] // 2  # FIXME change to metadata border offsets
+        x_max -= self.tile_size[0] // 2
+        y_min += self.tile_size[1] // 2
+        y_max -= self.tile_size[1] // 2
         assert x_max - x_min > 0 and y_max - y_min > 0
         cx = random.randint(x_min, x_max)
         cy = random.randint(y_min, y_max)
@@ -207,7 +219,7 @@ class SealionDataset(data.Dataset):
             if do_rotate:
                 angle = random.random() * 360
             scale = random.uniform(0.667, 1.5)
-            print('hflip: %d, vflip: %d, angle: %f, scale: %f' % (hflip, vflip, angle, scale))
+            #print('hflip: %d, vflip: %d, angle: %f, scale: %f' % (hflip, vflip, angle, scale))
         else:
             angle = 0.
             scale = 1.
@@ -234,23 +246,22 @@ class SealionDataset(data.Dataset):
         else:
             Mfinal = Mtrans
 
-        print(input_tile.shape)
+        #print(input_tile.shape)
 
         input_tile = cv2.warpAffine(input_tile, Mfinal[:2, :], tuple(self.tile_size))
         target_tile = cv2.warpAffine(target_tile, Mfinal[:2, :], tuple(self.tile_size))
 
-        print(np.ceil(np.sum(target_tile)/25))
+        #print(np.ceil(np.sum(target_tile)/25))
         return input_tile, target_tile
 
     def __getitem__(self, index):
-
         input_img, input_id = self._load_input(index % len(self))
         target_arr = self._load_target(input_id)
 
         h, w = input_img.shape[:2]
         #cx = 2836 + 136
         #cy = 762 + 176
-        attempts = 10
+        attempts = 32
         #print('Fetching %d' % index)
         for i in range(attempts):
             tw, th = self.tile_size
@@ -259,9 +270,9 @@ class SealionDataset(data.Dataset):
             # check centre of chosen tile for valid pixels
             if np.any(crop_around(input_tile, tw//2, th//2, tw//4, th//4)):
                 break
-        cv2.imwrite('test-scaled-input-%d.png' % index, input_tile)
-        cv2.imwrite('test-scaled-target-%d.png' % index, 4096*target_tile[:, :, :3])
-        return input_tile, target_tile
+        #cv2.imwrite('test-scaled-input-%d.png' % index, input_tile)
+        #cv2.imwrite('test-scaled-target-%d.png' % index, 4096*target_tile[:, :, :3])
+        return to_tensor(input_tile), to_tensor(target_tile)
 
     def __len__(self):
         return len(self.inputs)

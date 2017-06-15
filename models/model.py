@@ -8,7 +8,7 @@ from collections import OrderedDict
 def conv_block(
         in_chan, out_chan, 
         ksize=3, stride=1,
-        non_lin_fn=nn.LeakyReLU(0.1), use_batch_norm=False, dropout=0.):
+        non_lin_fn=nn.ReLU(), use_batch_norm=False, dropout=0.):
     layers = []
     layers += [nn.Conv2d(in_chan, out_chan, kernel_size=ksize, stride=stride)]
     if use_batch_norm:
@@ -19,7 +19,7 @@ def conv_block(
     layers += [nn.Conv2d(out_chan, out_chan, kernel_size=ksize, stride=stride)]
     if use_batch_norm:
         layers += [nn.BatchNorm2d(out_chan)]
-    layers['act2'] = non_lin_fn
+    layers += [non_lin_fn]
     if dropout:
         layers += [nn.Dropout(p=dropout)]
     return nn.Sequential(*layers)
@@ -47,7 +47,7 @@ class Model(nn.Module):
     def __init__(self, imsize):
         super(Model, self).__init__()
         self.imsize = imsize
-        self.activation = nn.ReLU()  # nn.LeakyReLU(0.1)
+        self.activation = nn.LeakyReLU(0.2)
 
         torch.LongTensor()
         
@@ -67,10 +67,10 @@ class Model(nn.Module):
         self.dec2 = conv_block(256, 128, 3, non_lin_fn=self.activation, use_batch_norm=True)
         self.dec1 = conv_block(128, 64, 3, non_lin_fn=self.activation, use_batch_norm=True)
 
-        self.upsample4 = upsample_layer()
-        self.upsample3 = upsample_layer()
-        self.upsample2 = upsample_layer()
-        self.upsample1 = upsample_layer()
+        self.upsample4 = upsample_layer(1024, 512)
+        self.upsample3 = upsample_layer(512, 256)
+        self.upsample2 = upsample_layer(256, 128)
+        self.upsample1 = upsample_layer(128, 64)
 
         self.conv_final = nn.Sequential(
             nn.Conv2d(64, 5, kernel_size=1, stride=1),
@@ -84,7 +84,6 @@ class Model(nn.Module):
             elif isinstance(m, nn.BatchNorm2d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
-
 
     def forward(self, x):
 
