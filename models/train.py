@@ -1,6 +1,6 @@
 import argparse
 import os
-from dataset import SealionDataset
+from dataset import SealionDataset, RandomTileSampler
 from model import Model
 
 import torch
@@ -26,13 +26,13 @@ parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
 parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                     help='how many batches to wait before logging training status')
-parser.add_argument('--num-processes', type=int, default=4, metavar='N',
+parser.add_argument('--num-processes', type=int, default=2, metavar='N',
                     help='how many training processes to use (default: 2)')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
 
 
-def train_epoch(epoch, model, loader, optimizer, loss_fn, log_interval=1, no_cuda=False):
+def train_epoch(epoch, model, loader, optimizer, loss_fn, log_interval=10, no_cuda=False):
     model.train()
     pid = os.getpid()
     for batch_idx, (input, target) in enumerate(loader):
@@ -47,7 +47,7 @@ def train_epoch(epoch, model, loader, optimizer, loss_fn, log_interval=1, no_cud
         optimizer.step()
         if batch_idx % log_interval == 0:
             print('{}\tTrain Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                pid, epoch, batch_idx * len(input), len(loader.dataset),
+                pid, epoch, batch_idx * len(input), len(loader.sampler),
                 100. * batch_idx / len(loader), loss.data[0]))
 
 
@@ -60,9 +60,12 @@ def main():
 
     batch_size = args.batch_size
     num_epochs = 1000
-
-    dataset = SealionDataset(train_input_root, train_target_root, train_counts_file)
-    loader = data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1)
+    tile_size = [284, 284]
+    dataset = SealionDataset(train_input_root, train_target_root, train_counts_file, tile_size=tile_size)
+    sampler = RandomTileSampler(dataset, oversample=256, repeat=8)
+    loader = data.DataLoader(
+        dataset,
+        batch_size=batch_size, shuffle=True, num_workers=args.num_processes, sampler=sampler)
     model = Model()
     if not args.no_cuda:
         model.cuda()

@@ -1,8 +1,8 @@
-from PIL import Image
 from collections import defaultdict, OrderedDict
 import cv2
 import torch
 import torch.utils.data as data
+from torch.utils.data.sampler import Sampler
 from torchvision import datasets, transforms
 import random
 import pandas as pd
@@ -11,7 +11,7 @@ import os
 import functools
 import time
 from contextlib import contextmanager
-
+import mytransforms
 
 IMG_EXTENSIONS = ['.jpg', '.jpeg', '.png']
 CATEGORIES = ["adult_males", "subadult_males", "adult_females", "juveniles", "pups"]
@@ -146,6 +146,55 @@ def gen_mask(input_img, dotted_file):
     return img_masked, mask
 
 
+class SampleTileIndex:
+    def __init__(self, sample_index, tile_index=0):
+        self.sample_index = sample_index
+        self.tile_index = tile_index
+
+
+class SequentialTileSampler(Sampler):
+    """Samples tiles across images sequentially, always in the same order.
+    """
+
+    def __init__(self, data_source):
+        self.num_samples = len(data_source)
+        self.sample_tile_map = data_source.sample_tile_map
+        #FIXME not complete
+
+    def __iter__(self):
+        samples = range(self.num_samples)
+        for i in samples:
+            for t in self.sample_tile_map[i]:
+                yield SampleTileIndex(i, t)
+
+    def __len__(self):
+        return self.num_samples # FIXME add up tiles
+
+
+class RandomTileSampler(Sampler):
+    """Oversamples random tiles from images in random order.
+        Repeats the same image index multiple times in a row to sample 'repeat' times
+        from the same image for big read efficiency gains.
+    """
+    def __init__(self, data_source, oversample=32, repeat=1):
+        self.oversample = oversample//repeat * repeat
+        self.repeat = repeat
+        self.num_samples = len(data_source)
+
+    def __iter__(self):
+        # There are simpler/more compact ways of doing this, but why not have a somewhat
+        # meaningful fake tile index?
+        for to in range(self.oversample//self.repeat):
+            samples = torch.randperm(self.num_samples).long()
+            for image_index in samples:
+                for ti in range(self.repeat):
+                    tile_index = to * self.repeat + ti
+                    yield SampleTileIndex(image_index, tile_index)
+
+    def __len__(self):
+        return self.num_samples * self.oversample
+
+
 class SealionDataset(data.Dataset):
     def __init__(
             self,
@@ -153,7 +202,7 @@ class SealionDataset(data.Dataset):
             target_root,
             counts_file,
             coords_file='',
-            tile_size=256,
+            tile_size=[256, 256],
             transform=None,
             target_transform=None):
 
@@ -170,11 +219,18 @@ class SealionDataset(data.Dataset):
         self.counts = counts
         self.inputs = inputs
         self.targets = targets
-        self.tile_size = [284, 284]
-        self.transform = transform
+        self.tile_size = tile_size
+        self.dataset_mean = [0.5, 0.5, 0.5]
+        self.dataset_std = [0.3, 0.3, 0.3]
+        if transform is None:
+            self.transform = transforms.Compose([
+                transforms.ToTensor(),
+                mytransforms.ColorJitter(),
+                transforms.Normalize(self.dataset_mean, self.dataset_std)
+            ])
         self.target_transform = target_transform
 
-    #@functools.lru_cache(128)
+    @functools.lru_cache(4)
     def _load_input(self, index):
         input_id, path = self.inputs[index]
         print("Loading %s" % path)
@@ -185,7 +241,7 @@ class SealionDataset(data.Dataset):
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         return img, input_id
 
-    #@functools.lru_cache(128)
+    @functools.lru_cache(4)
     def _load_target(self, input_id):
         target = None
         if input_id in self.targets:
@@ -255,9 +311,15 @@ class SealionDataset(data.Dataset):
         return input_tile, target_tile
 
     def __getitem__(self, index):
-        input_img, input_id = self._load_input(index % len(self))
-        target_arr = self._load_target(input_id)
+        if isinstance(index, SampleTileIndex):
+            tile = index.tile_index
+            index = index.sample_index
+        else:
+            tile = 0  #FIXME sort this out
 
+        input_img, input_id = self._load_input(index % len(self))
+        #print(input_id, index, tile)
+        target_arr = self._load_target(input_id)
         h, w = input_img.shape[:2]
         #cx = 2836 + 136
         #cy = 762 + 176
@@ -270,9 +332,13 @@ class SealionDataset(data.Dataset):
             # check centre of chosen tile for valid pixels
             if np.any(crop_around(input_tile, tw//2, th//2, tw//4, th//4)):
                 break
+
+        input_tile_tensor = self.transform(input_tile)
+
         #cv2.imwrite('test-scaled-input-%d.png' % index, input_tile)
         #cv2.imwrite('test-scaled-target-%d.png' % index, 4096*target_tile[:, :, :3])
-        return to_tensor(input_tile), to_tensor(target_tile)
+
+        return input_tile_tensor, to_tensor(target_tile)
 
     def __len__(self):
         return len(self.inputs)
