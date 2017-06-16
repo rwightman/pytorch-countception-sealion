@@ -220,8 +220,8 @@ class SealionDataset(data.Dataset):
         self.inputs = inputs
         self.targets = targets
         self.tile_size = tile_size
-        self.dataset_mean = [0.5, 0.5, 0.5]
-        self.dataset_std = [0.3, 0.3, 0.3]
+        self.dataset_mean = [0.41, 0.43, 0.44]
+        self.dataset_std = [0.19, 0.19, 0.18]
         if transform is None:
             self.transform = transforms.Compose([
                 transforms.ToTensor(),
@@ -235,7 +235,7 @@ class SealionDataset(data.Dataset):
         input_id, path = self.inputs[index]
         print("Loading %s" % path)
         if os.path.splitext(path)[1] == '.npy':
-            img = np.load(path) #, mmap_mode='r')
+            img = np.load(path)
         else:
             img = cv2.imread(path)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -321,10 +321,7 @@ class SealionDataset(data.Dataset):
         #print(input_id, index, tile)
         target_arr = self._load_target(input_id)
         h, w = input_img.shape[:2]
-        #cx = 2836 + 136
-        #cy = 762 + 176
         attempts = 32
-        #print('Fetching %d' % index)
         for i in range(attempts):
             tw, th = self.tile_size
             cx, cy = self._random_tile_center((tw, th, w - tw, h - th))
