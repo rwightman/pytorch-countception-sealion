@@ -28,13 +28,18 @@ parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                     help='how many batches to wait before logging training status')
 parser.add_argument('--num-processes', type=int, default=4, metavar='N',
                     help='how many training processes to use (default: 2)')
+parser.add_argument('--no-cuda', action='store_true', default=False,
+                    help='disables CUDA training')
 
 
-def train_epoch(epoch, model, loader, optimizer, loss_fn, log_interval=10):
+def train_epoch(epoch, model, loader, optimizer, loss_fn, log_interval=1, no_cuda=False):
     model.train()
     pid = os.getpid()
     for batch_idx, (input, target) in enumerate(loader):
-        input, target = autograd.Variable(input.cuda()), autograd.Variable(target.cuda())
+        if no_cuda:
+            input, target = autograd.Variable(input), autograd.Variable(target)
+        else:
+            input, target = autograd.Variable(input.cuda()), autograd.Variable(target.cuda())
         optimizer.zero_grad()
         output = model(input)
         loss = loss_fn(output, target)
@@ -53,19 +58,20 @@ def main():
     train_target_root = os.path.join(args.data, 'Train-processed/targets')
     train_counts_file = os.path.join(args.data, 'Train/train.csv')
 
-    batch_size = 64
+    batch_size = args.batch_size
     num_epochs = 1000
 
     dataset = SealionDataset(train_input_root, train_target_root, train_counts_file)
     loader = data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1)
-    model = Model(256)
-    model.cuda()
+    model = Model()
+    if not args.no_cuda:
+        model.cuda()
 
-    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-    loss_fn = torch.nn.MSELoss(size_average=False)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    loss_fn = torch.nn.MSELoss()
 
     for epoch in range(1, num_epochs + 1):
-        train_epoch(epoch, model, loader, optimizer, loss_fn)
+        train_epoch(epoch, model, loader, optimizer, loss_fn, no_cuda=args.no_cuda)
 
 
 if __name__ == '__main__':

@@ -76,7 +76,7 @@ def crop_around(img, cx, cy, crop_w, crop_h):
 def to_tensor(arr):
     assert(isinstance(arr, np.ndarray))
     t = torch.from_numpy(arr.transpose((2, 0, 1)))
-    print(t.size())
+    #print(t.size())
     if isinstance(t, torch.ByteTensor):
         return t.float().div(255)
     return t
@@ -170,7 +170,7 @@ class SealionDataset(data.Dataset):
         self.counts = counts
         self.inputs = inputs
         self.targets = targets
-        self.tile_size = [256, 256]
+        self.tile_size = [284, 284]
         self.transform = transform
         self.target_transform = target_transform
 
