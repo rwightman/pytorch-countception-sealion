@@ -49,19 +49,19 @@ class Process(object):
         self.bsize = 256
         self.reflect = False
 
-    def _process_file(self, frel, fabs, stats=None):
+    def _process_file(self, frel, fabs, results, stats=None):
         print('Processing %s...' % frel)
         basename = os.path.splitext(frel)[0]
         fid = int(basename)
 
         if frel not in self.coords_by_file.groups:
             print('Frame %s counts not found, skipping.' % frel)
-            return dict()
+            return
 
         img = cv2.imread(fabs)
         h, w = img.shape[:2]
-        hb = math.ceil((h + self.bsize)/self.bsize) * self.bsize
-        wb = math.ceil((w + self.bsize)/self.bsize) * self.bsize
+        hb = int(math.ceil((h + self.bsize)/self.bsize) * self.bsize)
+        wb = int(math.ceil((w + self.bsize)/self.bsize) * self.bsize)
         print(wb, hb)
         y_diff = hb - h
         x_diff = wb - w
@@ -70,22 +70,20 @@ class Process(object):
         print(x_offset, y_offset)
 
         dotted_file = os.path.join(self.dotted_path, frel)
-        mask_used = False
         if os.path.exists(dotted_file):
             img_dotted = cv2.imread(dotted_file)
             if img_dotted.shape[:2] != img.shape[:2]:
                 print("Dotted image size doesn't  match train for %s, skipping..." % frel)
-                return dict()
+                return
             mask = cv2.cvtColor(img_dotted, cv2.COLOR_BGR2GRAY)
             _, mask = cv2.threshold(mask, 15, 255, cv2.THRESH_BINARY)
             img = cv2.bitwise_and(img, img, mask=mask)
             # scale up the mask for targets
             mask = cv2.copyMakeBorder(
                 mask, y_offset, y_diff-y_offset, x_offset, x_diff-x_offset, cv2.BORDER_CONSTANT, (0, 0, 0))
-            mask_used = True
         else:
             print("No matching dotted file exists for %s, skipping..." % frel)
-            return dict()
+            return
 
         result = dict()
         result['filename'] = frel
@@ -96,12 +94,18 @@ class Process(object):
         result['x_offset'] = x_offset
         result['y_offset'] = y_offset
 
-        mean, std = cv2.meanStdDev(img, mask=mask if mask_used else None)
-        print('Mean, Std: ', np.array(mean)/255, np.array(std)/255)
+        mean, std = cv2.meanStdDev(img, mask=mask)
+        mean = mean[::-1].squeeze()/255
+        std = std[::-1].squeeze()/255
+        print('Mean, std: ', mean, std)
         result['mean'] = mean
         result['std'] = std
         if stats is not None:
-            stats.append(np.array([[np.array(mean), np.array(std)]]))
+            stats.append(np.array([mean, std]))
+            if len(stats) % 10 == 0:
+                print("Current avg mean, std:")
+                statss = np.array(stats)
+                print(np.mean(statss, axis=0))
 
         if self.reflect:
             border = cv2.BORDER_REFLECT_101
@@ -128,8 +132,7 @@ class Process(object):
 
             # OpenCV gaussian blur
             target_img = cv2.GaussianBlur(gimg, (19, 19), 3, borderType=cv2.BORDER_REFLECT_101)
-            if mask_used:
-                target_img = cv2.bitwise_and(target_img, target_img, mask=mask)
+            target_img = cv2.bitwise_and(target_img, target_img, mask=mask)
 
             test_sum = np.sum(target_img) / 32
             print("Min/max: ", np.min(target_img), np.max(target_img))
@@ -156,7 +159,7 @@ class Process(object):
             print('Counts for class %d:' % cat_idx, test_sum, target_img_float_sum)
             assert(np.isclose(test_sum, target_img_float_sum, rtol=.001, atol=.001))
 
-        return result
+        results.append(result)
 
     def __call__(self):
         if not os.path.isdir(self.input_path):
@@ -169,12 +172,9 @@ class Process(object):
         results = []
         stats = []
         for frel, fabs in inputs:
-            res = self._process_file(frel, fabs, stats)
-            if results:
-                results.append(res)
+            self._process_file(frel, fabs, results, stats)
         stats = np.array(stats)
-        print(np.mean(stats, axis=0))
-        print(np.mean(stats, axis=1))
+        print('Dataset mean, std: ', np.mean(stats, axis=0))
         return results
 
 
