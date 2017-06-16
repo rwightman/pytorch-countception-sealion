@@ -3,7 +3,8 @@ import os
 import time
 import shutil
 from dataset import SealionDataset, RandomTileSampler
-from model import Model
+from model_cnet import ModelCnet
+from model_countception import ModelCountception
 
 import torch
 import torch.autograd as autograd
@@ -54,6 +55,52 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
+def main():
+    args = parser.parse_args()
+
+    train_input_root = os.path.join(args.data, 'Train-processed/inputs')
+    train_target_root = os.path.join(args.data, 'Train-processed/targets')
+    train_counts_file = os.path.join(args.data, 'Train/train.csv')
+
+    batch_size = args.batch_size
+    num_epochs = 1000
+    tile_size = [256, 256]
+    dataset = SealionDataset(train_input_root, train_target_root, train_counts_file, tile_size=tile_size)
+    sampler = RandomTileSampler(dataset, oversample=256, repeat=8)
+    loader = data.DataLoader(
+        dataset,
+        batch_size=batch_size, shuffle=True, num_workers=args.num_processes, sampler=sampler)
+    model = ModelCnet(outplanes=5)
+    if not args.no_cuda:
+        model.cuda()
+
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    loss_fn = torch.nn.L1Loss() #torch.nn.MSELoss()
+    # optionally resume from a checkpoint
+
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print("=> loading checkpoint '{}'".format(args.resume))
+            checkpoint = torch.load(args.resume)
+            args.start_epoch = checkpoint['epoch']
+            model.load_state_dict(checkpoint['state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            print("=> loaded checkpoint '{}' (epoch {})"
+                  .format(args.resume, checkpoint['epoch']))
+        else:
+            print("=> no checkpoint found at '{}'".format(args.resume))
+
+    for epoch in range(1, num_epochs + 1):
+        adjust_learning_rate(optimizer, epoch, initial_lr=args.lr, decay_epochs=3)
+        train_epoch(epoch, model, loader, optimizer, loss_fn, no_cuda=args.no_cuda)
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'arch': 'c-net',
+            'state_dict':  model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+        }, is_best=True)
+
+
 def train_epoch(epoch, model, loader, optimizer, loss_fn, log_interval=10, no_cuda=False):
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
@@ -93,52 +140,6 @@ def train_epoch(epoch, model, loader, optimizer, loss_fn, log_interval=10, no_cu
                 rate_avg=input_var.size(0) / batch_time_m.avg,
                 data_time=data_time_m))
         end = time.time()
-
-
-def main():
-    args = parser.parse_args()
-
-    train_input_root = os.path.join(args.data, 'Train-processed/inputs')
-    train_target_root = os.path.join(args.data, 'Train-processed/targets')
-    train_counts_file = os.path.join(args.data, 'Train/train.csv')
-
-    batch_size = args.batch_size
-    num_epochs = 1000
-    tile_size = [284, 284]
-    dataset = SealionDataset(train_input_root, train_target_root, train_counts_file, tile_size=tile_size)
-    sampler = RandomTileSampler(dataset, oversample=256, repeat=8)
-    loader = data.DataLoader(
-        dataset,
-        batch_size=batch_size, shuffle=True, num_workers=args.num_processes, sampler=sampler)
-    model = Model()
-    if not args.no_cuda:
-        model.cuda()
-
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-    loss_fn = torch.nn.MSELoss()
-    # optionally resume from a checkpoint
-
-    if args.resume:
-        if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
-            checkpoint = torch.load(args.resume)
-            args.start_epoch = checkpoint['epoch']
-            model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.resume, checkpoint['epoch']))
-        else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
-
-    for epoch in range(1, num_epochs + 1):
-        adjust_learning_rate(optimizer, epoch, initial_lr=args.lr, decay_epochs=3)
-        train_epoch(epoch, model, loader, optimizer, loss_fn, no_cuda=args.no_cuda)
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'arch': 'c-net',
-            'state_dict':  model.state_dict(),
-            'optimizer': optimizer.state_dict(),
-        }, is_best=True)
 
 
 def adjust_learning_rate(optimizer, epoch, initial_lr, decay_epochs=5):

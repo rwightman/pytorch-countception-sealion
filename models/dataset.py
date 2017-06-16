@@ -220,8 +220,8 @@ class SealionDataset(data.Dataset):
         self.inputs = inputs
         self.targets = targets
         self.tile_size = tile_size
-        self.dataset_mean = [0.41, 0.43, 0.44]
-        self.dataset_std = [0.19, 0.19, 0.18]
+        self.dataset_mean = [0.43632373, 0.46022959, 0.4618598]
+        self.dataset_std = [0.17749958, 0.16631233, 0.16272708]
         if transform is None:
             self.transform = transforms.Compose([
                 transforms.ToTensor(),
