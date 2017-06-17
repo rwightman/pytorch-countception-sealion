@@ -15,6 +15,8 @@ import mytransforms
 
 IMG_EXTENSIONS = ['.jpg', '.jpeg', '.png']
 CATEGORIES = ["adult_males", "subadult_males", "adult_females", "juveniles", "pups"]
+CATEGORY_MAP = {"adult_males": 0, "subadult_males": 1, "adult_females": 2, "juveniles": 3, "pups": 4}
+
 
 @contextmanager
 def measure_time(title='unknown'):
@@ -63,7 +65,7 @@ def crop_around(img, cx, cy, crop_w, crop_h):
         trunc_bottom = bottom - img_h
         bottom = img_h
     if trunc_left or trunc_right or trunc_top or trunc_bottom:
-        print('truncated')
+        #print('truncated, %d, %d, %d, %d' % (cx, cy, crop_w, crop_h))
         img_new = np.zeros((crop_h, crop_w, img.shape[2]), dtype=img.dtype)
         trunc_bottom = crop_h - trunc_bottom
         trunc_right = crop_w - trunc_right
@@ -89,12 +91,12 @@ def find_inputs(folder, types=IMG_EXTENSIONS):
             base, ext = os.path.splitext(rel_filename)
             if ext.lower() in types:
                 abs_filename = os.path.join(root, rel_filename)
-                inputs.append((base, abs_filename))
-    return sorted(inputs, key=lambda k: k[0])
+                inputs.append((int(base), abs_filename))
+    return zip(*sorted(inputs, key=lambda k: k[0]))
 
 
-def find_targets(folder, inputs, types=IMG_EXTENSIONS):
-    inputs_set = {k for k, _ in inputs}
+def find_targets(folder, input_ids, types=IMG_EXTENSIONS):
+    inputs_set = set(input_ids)
     targets = defaultdict(dict)
     for root, _, files in os.walk(folder, topdown=False):
         for rel_filename in files:
@@ -103,9 +105,10 @@ def find_targets(folder, inputs, types=IMG_EXTENSIONS):
                 split = base.split('-')
                 if len(split) < 3:
                     continue
-                if split[0] in inputs_set:
+                fid = int(split[0])
+                if fid in inputs_set:
                     abs_filename = os.path.join(root, rel_filename)
-                    targets[split[0]][int(split[2])] = abs_filename
+                    targets[fid][int(split[2])] = abs_filename
     return targets
 
 
@@ -206,19 +209,41 @@ class SealionDataset(data.Dataset):
             transform=None,
             target_transform=None):
 
-        self.cat_to_idx = {cat: idx for idx, cat in enumerate(CATEGORIES)}
-        counts_df = pd.read_csv(counts_file)
-        counts = counts_df.to_records()
-
-        inputs = find_inputs(input_root, types=['.jpg'])
-        if len(inputs) == 0:
+        input_ids, input_paths = find_inputs(input_root, types=['.jpg'])
+        if len(input_ids) == 0:
             raise(RuntimeError("Found 0 images in : " + input_root))
+        self.input_index = input_ids
+        self.data_by_id = {k: {'input': v} for k, v in zip(input_ids, input_paths)}
 
-        targets = find_targets(target_root, inputs)
+        targets = find_targets(target_root, input_ids)
+        for k, v in targets.items():
+            d = self.data_by_id[k]
+            d['target'] = v
 
-        self.counts = counts
-        self.inputs = inputs
-        self.targets = targets
+        if counts_file:
+            counts_df = pd.read_csv(counts_file).rename(columns=CATEGORY_MAP)
+            counts_df.drop(['train_id'], 1, inplace=True)
+            for k, v in counts_df.to_dict('index').items():
+                if k in self.data_by_id:
+                    d = self.data_by_id[k]
+                    d['counts_by_cat'] = v
+                    d['count'] = sum(v.values())
+
+        if coords_file:
+            coords_df = pd.read_csv(coords_file, index_col=False)
+            coords_df.x_coord = coords_df.x_coord.astype('int')
+            coords_df.y_coord = coords_df.y_coord.astype('int')
+            coords_df.category = coords_df.category.replace(CATEGORY_MAP)
+            groupby_file = coords_df.groupby(['filename'])
+            for file in groupby_file.indices:
+                coords = groupby_file.get_group(file)
+                coords = coords[['x_coord', 'y_coord', 'category']].as_matrix()
+                coords.sort(axis=0)
+                fid = int(os.path.splitext(file)[0])
+                if fid in self.data_by_id:
+                    d = self.data_by_id[fid]
+                    d['coords'] = coords
+
         self.tile_size = tile_size
         self.dataset_mean = [0.43632373, 0.46022959, 0.4618598]
         self.dataset_std = [0.17749958, 0.16631233, 0.16272708]
@@ -231,39 +256,45 @@ class SealionDataset(data.Dataset):
         self.target_transform = target_transform
 
     @functools.lru_cache(4)
-    def _load_input(self, index):
-        input_id, path = self.inputs[index]
+    def _load_input(self, input_id):
+        path = self.data_by_id[input_id]['input']
         print("Loading %s" % path)
         if os.path.splitext(path)[1] == '.npy':
             img = np.load(path)
         else:
             img = cv2.imread(path)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        return img, input_id
+        return img
 
     @functools.lru_cache(4)
     def _load_target(self, input_id):
-        target = None
-        if input_id in self.targets:
-            tp = [cv2.imread(self.targets[input_id][x], -1) for x in range(5)]
-            target = np.dstack(tp)
-            target = target / np.iinfo(np.uint16).max
-            target = target.astype(np.float32, copy=False)
+        d = self.data_by_id[input_id]
+        tp = [cv2.imread(d['target'][x], -1) for x in range(5)]
+        target = np.dstack(tp)
+        target = target / np.iinfo(np.uint16).max
+        target = target.astype(np.float32, copy=False)
         return target
 
-    def _random_tile_center(self, bbox):
-        # return random center coords for specified tile size within a specified (x, y, w, h) bounding box
-        x_min = bbox[0]
-        x_max = bbox[0] + bbox[2]
-        y_min = bbox[1]
-        y_max = bbox[1] + bbox[3]
-        x_min += self.tile_size[0] // 2  # FIXME change to metadata border offsets
-        x_max -= self.tile_size[0] // 2
-        y_min += self.tile_size[1] // 2
-        y_max -= self.tile_size[1] // 2
-        assert x_max - x_min > 0 and y_max - y_min > 0
-        cx = random.randint(x_min, x_max)
-        cy = random.randint(y_min, y_max)
+    def _random_tile_center(self, input_id, bbox):
+        d = self.data_by_id[input_id]
+        if len(d['coords']) and random.random() < 0.4:
+            # 40% of the time, randomly pick a point around an actual sealion
+            cx, cy, _ = d['coords'][random.randint(0, len(d['coords']) - 1)]
+            cx = cx + random.randint(-self.tile_size[0]//4, self.tile_size[0]//4)
+            cy = cy + random.randint(-self.tile_size[1]//4, self.tile_size[1]//4)
+        else:
+            # return random center coords for specified tile size within a specified (x, y, w, h) bounding box
+            x_min = bbox[0]
+            x_max = bbox[0] + bbox[2]
+            y_min = bbox[1]
+            y_max = bbox[1] + bbox[3]
+            x_min += self.tile_size[0] // 2  # FIXME change to metadata border offsets
+            x_max -= self.tile_size[0] // 2
+            y_min += self.tile_size[1] // 2
+            y_max -= self.tile_size[1] // 2
+            assert x_max - x_min > 0 and y_max - y_min > 0
+            cx = random.randint(x_min, x_max)
+            cy = random.randint(y_min, y_max)
         return cx, cy
 
     def _crop_and_transform(self, cx, cy, input_img, target_arr, randomize=False):
@@ -317,14 +348,15 @@ class SealionDataset(data.Dataset):
         else:
             tile = 0  #FIXME sort this out
 
-        input_img, input_id = self._load_input(index % len(self))
+        input_id = self.input_index[index % len(self)]
         #print(input_id, index, tile)
+        input_img = self._load_input(input_id)
         target_arr = self._load_target(input_id)
         h, w = input_img.shape[:2]
         attempts = 32
         for i in range(attempts):
             tw, th = self.tile_size
-            cx, cy = self._random_tile_center((tw, th, w - tw, h - th))
+            cx, cy = self._random_tile_center(input_id, (tw, th, w - tw, h - th))
             input_tile, target_tile = self._crop_and_transform(cx, cy, input_img, target_arr, randomize=True)
             # check centre of chosen tile for valid pixels
             if np.any(crop_around(input_tile, tw//2, th//2, tw//4, th//4)):
@@ -338,4 +370,4 @@ class SealionDataset(data.Dataset):
         return input_tile_tensor, to_tensor(target_tile)
 
     def __len__(self):
-        return len(self.inputs)
+        return len(self.input_index)

@@ -61,12 +61,18 @@ def main():
     train_input_root = os.path.join(args.data, 'Train-processed/inputs')
     train_target_root = os.path.join(args.data, 'Train-processed/targets')
     train_counts_file = os.path.join(args.data, 'Train/train.csv')
+    train_coords_file = os.path.join(args.data, 'Train/correct_coords.csv')
 
     batch_size = args.batch_size
     num_epochs = 1000
     tile_size = [256, 256]
-    dataset = SealionDataset(train_input_root, train_target_root, train_counts_file, tile_size=tile_size)
-    sampler = RandomTileSampler(dataset, oversample=256, repeat=8)
+    dataset = SealionDataset(
+        train_input_root,
+        train_target_root,
+        train_counts_file,
+        train_coords_file,
+        tile_size=tile_size)
+    sampler = RandomTileSampler(dataset, oversample=256, repeat=16)
     loader = data.DataLoader(
         dataset,
         batch_size=batch_size, shuffle=True, num_workers=args.num_processes, sampler=sampler)
@@ -98,7 +104,9 @@ def main():
             'arch': 'c-net',
             'state_dict':  model.state_dict(),
             'optimizer': optimizer.state_dict(),
-        }, is_best=True)
+            },
+            is_best=False,
+            filename='checkpoint-%d.pth.tar' % epoch)
 
 
 def train_epoch(epoch, model, loader, optimizer, loss_fn, log_interval=10, no_cuda=False):
