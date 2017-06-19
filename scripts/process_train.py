@@ -11,9 +11,8 @@ from scipy.ndimage import gaussian_filter
 
 
 COLS = ['filename', 'width', 'height', 'buffer_width', 'buffer_height', 'x_offset', 'y_offset']
-
-categories = ["adult_males",  "subadult_males", "adult_females", "juveniles",  "pups"]
-category_map = {"adult_males": 0, "subadult_males": 1, "adult_females": 2, "juveniles": 3, "pups": 4}
+CATEGORIES = ["adult_males", "subadult_males", "adult_females", "juveniles", "pups"]
+CATEGORY_MAP = {"adult_males": 0, "subadult_males": 1, "adult_females": 2, "juveniles": 3, "pups": 4}
 
 
 def get_outdir(parent_dir, child_dir=''):
@@ -34,17 +33,17 @@ def find_images(folder, types=('.jpg', '.jpeg')):
 
 
 class Process(object):
-    def __init__(self, root_path, counts_filename, coords_filename):
+    def __init__(self, root_path, counts_filename, coords_filename, dest_name='Train-processed'):
 
         self.input_path = os.path.join(root_path, 'Train')
         self.dotted_path = os.path.join(root_path, 'TrainDotted')
-        self.output_path_inputs = get_outdir(os.path.join(root_path, 'Train-processed', 'inputs'))
-        self.output_path_targets = get_outdir(os.path.join(root_path, 'Train-processed', 'targets'))
+        self.output_path_inputs = get_outdir(os.path.join(root_path, dest_name, 'inputs'))
+        self.output_path_targets = get_outdir(os.path.join(root_path, dest_name, 'targets'))
         self.counts_df = pd.read_csv(os.path.join(root_path, counts_filename), index_col=0)
         self.coords_df = pd.read_csv(os.path.join(root_path, coords_filename), index_col=False)
         self.coords_df.x_coord = self.coords_df.x_coord.astype('int')
         self.coords_df.y_coord = self.coords_df.y_coord.astype('int')
-        self.coords_df.category = self.coords_df.category.replace(category_map)
+        self.coords_df.category = self.coords_df.category.replace(CATEGORY_MAP)
         self.coords_by_file = self.coords_df.groupby('filename')
         self.bsize = 256
         self.reflect = False
@@ -116,37 +115,25 @@ class Process(object):
 
         img = cv2.copyMakeBorder(img, y_offset, y_diff-y_offset, x_offset, x_diff-x_offset, border, value)
         cv2.imwrite(os.path.join(self.output_path_inputs, frel), img)
-        cv2.imwrite(os.path.join(self.output_path_inputs, basename + '.png'), img)
+        #cv2.imwrite(os.path.join(self.output_path_inputs, basename + '.png'), img)
 
         print(self.counts_df.ix[fid])
         yxc = self.coords_by_file.get_group(frel).as_matrix(columns=['y_coord', 'x_coord', 'category'])
 
-        for cat_name in categories:
-            cat_idx = category_map[cat_name]
+        targets = []
+        write_scaled_pngs = False
+        for cat_idx, cat_name in enumerate(CATEGORIES):
             yx = yxc[yxc[:, 2] == cat_idx][:, :2]
             yx += [y_offset, x_offset]
 
             gimg = np.zeros([hb, wb])
             for y, x in yx:
-                gimg[y, x] += 32.
+                gimg[y, x] += 1024.
 
             # OpenCV gaussian blur
             target_img = cv2.GaussianBlur(gimg, (19, 19), 3, borderType=cv2.BORDER_REFLECT_101)
             target_img = cv2.bitwise_and(target_img, target_img, mask=mask)
-
-            test_sum = np.sum(target_img) / 32
             print("Min/max: ", np.min(target_img), np.max(target_img))
-
-            UINT16_MAX = np.iinfo(np.uint16).max
-            target_img = target_img * UINT16_MAX
-            target_img = target_img.astype('uint16')
-
-            target_path = os.path.join(self.output_path_targets, basename + '-target-%d.png' % cat_idx)
-            cv2.imwrite(target_path, target_img)
-
-            # read back and verify
-            target_img_float = cv2.imread(target_path, -1) / UINT16_MAX
-            target_img_float_sum = np.sum(target_img_float) / 32
 
             # Scipy, scipy.ndimage.filters.gaussian_filter
             #blah2 = gaussian_filter(gimg, 3)
@@ -156,8 +143,26 @@ class Process(object):
             #blah2 = blah2 * 255
             #cv2.imwrite(os.path.join(self.output_path, basename + '-gn.jpg'), blah2)
 
-            print('Counts for class %d:' % cat_idx, test_sum, target_img_float_sum)
-            assert(np.isclose(test_sum, target_img_float_sum, rtol=.001, atol=.001))
+            targets.append(target_img.astype(np.float32))
+            test_sum = np.sum(target_img) / 1024
+            if write_scaled_pngs:
+                INT_SCALE = np.iinfo(np.uint16).max / 32
+                target_img_uint16 = target_img * INT_SCALE
+                target_img_uint16 = target_img_uint16.astype('uint16')
+
+                target_path = os.path.join(self.output_path_targets, basename + '-target-%d.png' % cat_idx)
+                cv2.imwrite(target_path, target_img_uint16)
+
+                # read back and verify
+                target_img_float = cv2.imread(target_path, -1) / INT_SCALE
+                target_img_float_sum = np.sum(target_img_float) / 1024
+
+                print('Counts for class %d:' % cat_idx, test_sum, target_img_float_sum, len(yx))
+                assert(np.isclose(test_sum, target_img_float_sum, rtol=.001, atol=.001))
+
+        target_stacked = np.dstack(targets)
+        target_path = os.path.join(self.output_path_targets, basename + '-target.npz')
+        np.savez_compressed(target_path, target_stacked)
 
         results.append(result)
 
@@ -183,14 +188,15 @@ def main():
     args = parser.parse_args()
 
     root_path = '/data/x/sealion/'
+    dest_name = 'Train_processed'
     counts_filename = 'Train/train.csv'
     coords_filename = 'Train/correct_coords.csv'
 
-    process = Process(root_path, counts_filename, coords_filename)
+    process = Process(root_path, counts_filename, coords_filename, dest_name=dest_name)
     results = process()
 
     df = pd.DataFrame.from_records(results, columns=COLS)
-    df.to_csv(os.path.join(root_path, 'Train-processed', 'info.csv'), index=False)
+    df.to_csv(os.path.join(root_path, dest_name, 'processed.csv'), index=False)
 
 if __name__ == '__main__':
     main()

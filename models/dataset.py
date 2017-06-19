@@ -92,7 +92,10 @@ def find_inputs(folder, types=IMG_EXTENSIONS):
             if ext.lower() in types:
                 abs_filename = os.path.join(root, rel_filename)
                 inputs.append((int(base), abs_filename))
-    return zip(*sorted(inputs, key=lambda k: k[0]))
+    if inputs:
+        return zip(*sorted(inputs, key=lambda k: k[0]))
+    else:
+        return [], []
 
 
 def find_targets(folder, input_ids, types=IMG_EXTENSIONS):
@@ -103,12 +106,14 @@ def find_targets(folder, input_ids, types=IMG_EXTENSIONS):
             base, ext = os.path.splitext(rel_filename)
             if ext.lower() in types:
                 split = base.split('-')
-                if len(split) < 3:
-                    continue
                 fid = int(split[0])
                 if fid in inputs_set:
                     abs_filename = os.path.join(root, rel_filename)
-                    targets[fid][int(split[2])] = abs_filename
+                    print(split)
+                    if len(split) > 2:
+                        targets[fid][int(split[2])] = abs_filename
+                    else:
+                        targets[fid] = abs_filename
     return targets
 
 
@@ -161,14 +166,15 @@ class SequentialTileSampler(Sampler):
 
     def __init__(self, data_source):
         self.num_samples = len(data_source)
-        self.sample_tile_map = data_source.sample_tile_map
+        #self.sample_tile_map = data_source.sample_tile_map
         #FIXME not complete
 
     def __iter__(self):
         samples = range(self.num_samples)
-        for i in samples:
-            for t in self.sample_tile_map[i]:
-                yield SampleTileIndex(i, t)
+        return iter(samples)
+        #for i in samples:
+        #    for t in self.sample_tile_map[i]:
+        #        yield SampleTileIndex(i, t)
 
     def __len__(self):
         return self.num_samples # FIXME add up tiles
@@ -202,9 +208,11 @@ class SealionDataset(data.Dataset):
     def __init__(
             self,
             input_root,
-            target_root,
-            counts_file,
+            target_root='',
+            counts_file='',
             coords_file='',
+            processing_file='',
+            train=True,
             tile_size=[256, 256],
             transform=None,
             target_transform=None):
@@ -215,19 +223,40 @@ class SealionDataset(data.Dataset):
         self.input_index = input_ids
         self.data_by_id = {k: {'input': v} for k, v in zip(input_ids, input_paths)}
 
-        targets = find_targets(target_root, input_ids)
-        for k, v in targets.items():
-            d = self.data_by_id[k]
-            d['target'] = v
+        self.has_targets = False
+        if os.path.exists(target_root):
+            targets = find_targets(target_root, input_ids, types=['.npz'])
+            if len(targets):
+                for k, v in targets.items():
+                    d = self.data_by_id[k]
+                    d['target'] = v
+                self.has_targets = True
+            else:
+                raise (RuntimeError("Found 0 targets in : " + target_root))
+
+        if train:
+            assert self.has_targets
+        self.train = train
 
         if counts_file:
             counts_df = pd.read_csv(counts_file).rename(columns=CATEGORY_MAP)
             counts_df.drop(['train_id'], 1, inplace=True)
-            for k, v in counts_df.to_dict('index').items():
+            for k, v in counts_df.to_dict(orient='index').items():
                 if k in self.data_by_id:
                     d = self.data_by_id[k]
                     d['counts_by_cat'] = v
                     d['count'] = sum(v.values())
+
+        if processing_file:
+            process_df = pd.read_csv(processing_file, index_col=False)
+            cols = ['x_offset', 'y_offset', 'width', 'height']
+            process_df[cols] = process_df[cols].astype(int)
+            process_df['train_id'] = process_df.filename.map(lambda x: int(os.path.splitext(x)[0]))
+            process_df.set_index(['train_id'], inplace=True)
+            for k, v in process_df[cols].to_dict(orient='index').items():
+                if k in self.data_by_id:
+                    d = self.data_by_id[k]
+                    d['process'] = v
 
         if coords_file:
             coords_df = pd.read_csv(coords_file, index_col=False)
@@ -242,17 +271,26 @@ class SealionDataset(data.Dataset):
                 fid = int(os.path.splitext(file)[0])
                 if fid in self.data_by_id:
                     d = self.data_by_id[fid]
+                    if 'process' in d:
+                        xy_offset = np.array([d['process']['x_offset'], d['process']['y_offset']])
+                        coords[:, :2] = coords[:, :2] + xy_offset
                     d['coords'] = coords
 
         self.tile_size = tile_size
         self.dataset_mean = [0.43632373, 0.46022959, 0.4618598]
         self.dataset_std = [0.17749958, 0.16631233, 0.16272708]
         if transform is None:
-            self.transform = transforms.Compose([
-                transforms.ToTensor(),
-                mytransforms.ColorJitter(),
-                transforms.Normalize(self.dataset_mean, self.dataset_std)
-            ])
+            if self.train:
+                self.transform = transforms.Compose([
+                    transforms.ToTensor(),
+                    mytransforms.ColorJitter(),
+                    transforms.Normalize(self.dataset_mean, self.dataset_std)
+                ])
+            else:
+                self.transform = transforms.Compose([
+                    transforms.ToTensor(),
+                    transforms.Normalize(self.dataset_mean, self.dataset_std)
+                ])
         self.target_transform = target_transform
 
     @functools.lru_cache(4)
@@ -269,13 +307,22 @@ class SealionDataset(data.Dataset):
     @functools.lru_cache(4)
     def _load_target(self, input_id):
         d = self.data_by_id[input_id]
-        tp = [cv2.imread(d['target'][x], -1) for x in range(5)]
-        target = np.dstack(tp)
-        target = target / np.iinfo(np.uint16).max
-        target = target.astype(np.float32, copy=False)
+        if isinstance(d['target'], dict):
+            tp = [cv2.imread(d['target'][x], -1) for x in range(5)]
+            target = np.dstack(tp)
+            target = target / np.iinfo(np.uint16).max
+            target = target.astype(np.float32, copy=False)
+        else:
+            target = np.load(d['target'])['arr_0']
+            target = target.astype(np.float32, copy=False)
         return target
 
-    def _random_tile_center(self, input_id, bbox):
+    def _indexed_tile_center(self, input_id, index):
+        d = self.data_by_id[input_id]
+        cx, cy = 0, 0
+        return cx, cy
+
+    def _random_tile_center(self, input_id, w, h):
         d = self.data_by_id[input_id]
         if len(d['coords']) and random.random() < 0.4:
             # 40% of the time, randomly pick a point around an actual sealion
@@ -284,20 +331,28 @@ class SealionDataset(data.Dataset):
             cy = cy + random.randint(-self.tile_size[1]//4, self.tile_size[1]//4)
         else:
             # return random center coords for specified tile size within a specified (x, y, w, h) bounding box
-            x_min = bbox[0]
-            x_max = bbox[0] + bbox[2]
-            y_min = bbox[1]
-            y_max = bbox[1] + bbox[3]
-            x_min += self.tile_size[0] // 2  # FIXME change to metadata border offsets
-            x_max -= self.tile_size[0] // 2
-            y_min += self.tile_size[1] // 2
-            y_max -= self.tile_size[1] // 2
+            tw, th = self.tile_size[0] // 2, self.tile_size[0]//2
+            x_min = tw
+            x_max = w - tw
+            y_min = th
+            y_max = h - th
+            if 'process' in d:
+                p = d['process']
+                xo, yo = p['x_offset'], p['y_offset']
+                ow, oh = p['width'], p['height']
+                x_min += xo
+                x_max -= w - ow - xo
+                y_min += yo
+                y_max -= h - oh - yo
+                #print(x_min, x_max, y_min, y_max, w, h, ow, oh)
             assert x_max - x_min > 0 and y_max - y_min > 0
             cx = random.randint(x_min, x_max)
             cy = random.randint(y_min, y_max)
         return cx, cy
 
     def _crop_and_transform(self, cx, cy, input_img, target_arr, randomize=False):
+        target_tile = None
+        transform_target = False if target_arr is None else True
         if randomize:
             angle = 0.
             hflip = random.random() < 0.5
@@ -315,30 +370,36 @@ class SealionDataset(data.Dataset):
 
         crop_w, crop_h = get_crop_size(self.tile_size[0], self.tile_size[1], angle, scale)
         input_tile = crop_around(input_img, cx, cy, crop_w, crop_h)
-        target_tile = crop_around(target_arr, cx, cy, crop_w, crop_h)
+        if transform_target:
+            target_tile = crop_around(target_arr, cx, cy, crop_w, crop_h)
 
-        Mtrans = np.identity(3)
-        Mtrans[0, 2] = (self.tile_size[0] - crop_w) // 2
-        Mtrans[1, 2] = (self.tile_size[1] - crop_h) // 2
-        if hflip:
-            Mtrans[0, 0] *= -1
-            Mtrans[0, 2] = self.tile_size[0] - Mtrans[0, 2]
-        if vflip:
-            Mtrans[1, 1] *= -1
-            Mtrans[1, 2] = self.tile_size[1] - Mtrans[1, 2]
+        # Perform tile geometry transforms if needed
+        if angle or scale != 1. or hflip or vflip:
+            Mtrans = np.identity(3)
+            Mtrans[0, 2] = (self.tile_size[0] - crop_w) // 2
+            Mtrans[1, 2] = (self.tile_size[1] - crop_h) // 2
+            if hflip:
+                Mtrans[0, 0] *= -1
+                Mtrans[0, 2] = self.tile_size[0] - Mtrans[0, 2]
+            if vflip:
+                Mtrans[1, 1] *= -1
+                Mtrans[1, 2] = self.tile_size[1] - Mtrans[1, 2]
 
-        if angle or scale != 1.:
-            Mrot = cv2.getRotationMatrix2D((crop_w//2, crop_h//2), angle, scale)
-            Mfinal = np.dot(Mtrans, np.vstack([Mrot, [0, 0, 1]]))
-        else:
-            Mfinal = Mtrans
+            if angle or scale != 1.:
+                Mrot = cv2.getRotationMatrix2D((crop_w//2, crop_h//2), angle, scale)
+                Mfinal = np.dot(Mtrans, np.vstack([Mrot, [0, 0, 1]]))
+            else:
+                Mfinal = Mtrans
 
-        #print(input_tile.shape)
+            #print(input_tile.shape)
+            input_tile = cv2.warpAffine(input_tile, Mfinal[:2, :], tuple(self.tile_size))
+            if transform_target:
+                tt64 = target_tile.astype(np.float64)
+                tt64 = cv2.warpAffine(tt64, Mfinal[:2, :], tuple(self.tile_size))
+                if scale != 1.:
+                    tt64 /= scale**2
+                target_tile = tt64.astype(np.float32)
 
-        input_tile = cv2.warpAffine(input_tile, Mfinal[:2, :], tuple(self.tile_size))
-        target_tile = cv2.warpAffine(target_tile, Mfinal[:2, :], tuple(self.tile_size))
-
-        #print(np.ceil(np.sum(target_tile)/25))
         return input_tile, target_tile
 
     def __getitem__(self, index):
@@ -349,25 +410,58 @@ class SealionDataset(data.Dataset):
             tile = 0  #FIXME sort this out
 
         input_id = self.input_index[index % len(self)]
-        #print(input_id, index, tile)
         input_img = self._load_input(input_id)
-        target_arr = self._load_target(input_id)
-        h, w = input_img.shape[:2]
-        attempts = 32
-        for i in range(attempts):
-            tw, th = self.tile_size
-            cx, cy = self._random_tile_center(input_id, (tw, th, w - tw, h - th))
-            input_tile, target_tile = self._crop_and_transform(cx, cy, input_img, target_arr, randomize=True)
-            # check centre of chosen tile for valid pixels
-            if np.any(crop_around(input_tile, tw//2, th//2, tw//4, th//4)):
-                break
+        #print(input_id, index, tile)
 
-        input_tile_tensor = self.transform(input_tile)
+        if self.train:
+            target_arr = self._load_target(input_id)
+            h, w = input_img.shape[:2]
+            attempts = 32
+            for i in range(attempts):
+                tw, th = self.tile_size
+                cx, cy = self._random_tile_center(input_id, w, h)
+                input_tile, target_tile = self._crop_and_transform(cx, cy, input_img, target_arr, randomize=True)
+                # check centre of chosen tile for valid pixels
+                if np.any(crop_around(input_tile, tw//2, th//2, tw//4, th//4)):
+                    break
+            input_tile_tensor = self.transform(input_tile)
+            target_tile_tensor = to_tensor(target_tile)
+        else:
+            target_arr = None
+            if self.has_targets:
+                target_arr = self._load_target(input_id)
+            cx, cy = self._indexed_tile_center(input_id, index)
+            input_tile, target_tile = self._crop_and_transform(cx, cy, input_img, target_arr, randomize=False)
+            input_tile_tensor = self.transform(input_tile)
+            if target_tile is None:
+                target_tile_tensor = torch.from_numpy(np.array([input_id, tile]))
+            else:
+                target_tile_tensor = to_tensor(target_tile)
+            #print(input_tile_tensor.size(), target_tile_tensor)
 
         #cv2.imwrite('test-scaled-input-%d.png' % index, input_tile)
         #cv2.imwrite('test-scaled-target-%d.png' % index, 4096*target_tile[:, :, :3])
 
-        return input_tile_tensor, to_tensor(target_tile)
+        return input_tile_tensor, target_tile_tensor
 
     def __len__(self):
         return len(self.input_index)
+
+
+def combine_patches(output_img, patches, patch_size, stride, agg_fn=np.mean):
+    oh, ow = output_img.shape[:2]
+    pw, ph = patch_size
+    patch_rows = ow // pw + 1
+    for i in range(0, ow):
+        pi_left = ((i - pw) // stride) + 1
+        pi_right = i // stride + 1
+        for j in range(0, oh):
+            pj_top = ((j - ph) // stride) + 1
+            pj_bottom = j // stride + 1
+            agg = []
+            for pi in range(pi_left, pi_right):
+                for pj in range(pj_top, pj_bottom):
+                    px = i - pi * stride
+                    py = j - pj * stride
+                    agg.append(patches[pi + pj * patch_rows][px, py])
+            output_img[i, j] = agg_fn(agg)

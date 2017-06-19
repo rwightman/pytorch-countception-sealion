@@ -5,12 +5,14 @@ import shutil
 from dataset import SealionDataset, RandomTileSampler
 from model_cnet import ModelCnet
 from model_countception import ModelCountception
+from utils import AverageMeter
 
 import torch
 import torch.autograd as autograd
 import torch.utils.data as data
 import torch.optim as optim
 import torch.nn.functional as F
+import torchvision.utils
 
 parser = argparse.ArgumentParser(description='PyTorch Sealion count training')
 parser.add_argument('data', metavar='DIR',
@@ -35,31 +37,18 @@ parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
+parser.add_argument('--save-batches', action='store_true', default=False,
+                    help='save images of batch inputs and targets every log interval for debugging/verification')
 
-
-class AverageMeter(object):
-    """Computes and stores the average and current value"""
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
 
 
 def main():
     args = parser.parse_args()
 
-    train_input_root = os.path.join(args.data, 'Train-processed/inputs')
-    train_target_root = os.path.join(args.data, 'Train-processed/targets')
+    processed_base = 'Train-processed-2'
+    train_input_root = os.path.join(args.data, processed_base, 'inputs')
+    train_target_root = os.path.join(args.data,  processed_base, 'targets')
+    train_process_file = os.path.join(args.data, processed_base, 'process.csv')
     train_counts_file = os.path.join(args.data, 'Train/train.csv')
     train_coords_file = os.path.join(args.data, 'Train/correct_coords.csv')
 
@@ -71,6 +60,8 @@ def main():
         train_target_root,
         train_counts_file,
         train_coords_file,
+        train_process_file,
+        train=True,
         tile_size=tile_size)
     sampler = RandomTileSampler(dataset, oversample=256, repeat=16)
     loader = data.DataLoader(
@@ -98,7 +89,7 @@ def main():
 
     for epoch in range(1, num_epochs + 1):
         adjust_learning_rate(optimizer, epoch, initial_lr=args.lr, decay_epochs=3)
-        train_epoch(epoch, model, loader, optimizer, loss_fn, no_cuda=args.no_cuda)
+        train_epoch(epoch, model, loader, optimizer, loss_fn, args)
         save_checkpoint({
             'epoch': epoch + 1,
             'arch': 'c-net',
@@ -109,7 +100,7 @@ def main():
             filename='checkpoint-%d.pth.tar' % epoch)
 
 
-def train_epoch(epoch, model, loader, optimizer, loss_fn, log_interval=10, no_cuda=False):
+def train_epoch(epoch, model, loader, optimizer, loss_fn, args):
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     losses_m = AverageMeter()
@@ -119,7 +110,7 @@ def train_epoch(epoch, model, loader, optimizer, loss_fn, log_interval=10, no_cu
     end = time.time()
     for batch_idx, (input, target) in enumerate(loader):
         data_time_m.update(time.time() - end)
-        if no_cuda:
+        if args.no_cuda:
             input_var, target_var = autograd.Variable(input), autograd.Variable(target)
         else:
             input_var, target_var = autograd.Variable(input.cuda()), autograd.Variable(target.cuda())
@@ -133,7 +124,7 @@ def train_epoch(epoch, model, loader, optimizer, loss_fn, log_interval=10, no_cu
         optimizer.step()
 
         batch_time_m.update(time.time() - end)
-        if batch_idx % log_interval == 0:
+        if batch_idx % args.log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]  '
                   'Loss: {loss.val:.6f} ({loss.avg:.4f})  '
                   'Time: {batch_time.val:.3f}s, {rate:.3f}/s  '
@@ -147,6 +138,10 @@ def train_epoch(epoch, model, loader, optimizer, loss_fn, log_interval=10, no_cu
                 rate=input_var.size(0) / batch_time_m.val,
                 rate_avg=input_var.size(0) / batch_time_m.avg,
                 data_time=data_time_m))
+
+            if args.save_batches:
+                torchvision.utils.save_image(input, 'input-batch-%d.jpg' % batch_idx, normalize=True)
+                torchvision.utils.save_image(torch.sum(target, dim=1), 'target-batch-%d.jpg' % batch_idx, normalize=True)
         end = time.time()
 
 
