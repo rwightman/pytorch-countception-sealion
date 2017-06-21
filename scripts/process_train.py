@@ -10,7 +10,7 @@ from scipy.stats import kde
 from scipy.ndimage import gaussian_filter
 
 
-COLS = ['filename', 'width', 'height', 'buffer_width', 'buffer_height', 'x_offset', 'y_offset']
+COLS = ['filename', 'width', 'height', 'xmin', 'ymin', 'xmax', 'ymax']
 CATEGORIES = ["adult_males", "subadult_males", "adult_females", "juveniles", "pups"]
 CATEGORY_MAP = {"adult_males": 0, "subadult_males": 1, "adult_females": 2, "juveniles": 3, "pups": 4}
 
@@ -47,6 +47,8 @@ class Process(object):
         self.coords_by_file = self.coords_df.groupby('filename')
         self.bsize = 256
         self.reflect = False
+        self.calc_stats = False
+        self.write_scaled_pngs = False
 
     def _process_file(self, frel, fabs, results, stats=None):
         print('Processing %s...' % frel)
@@ -88,23 +90,24 @@ class Process(object):
         result['filename'] = frel
         result['height'] = hb
         result['width'] = wb
-        result['xmax'] = x_max
-        result['ymax'] = y_max
         result['xmin'] = x_min
         result['ymin'] = y_min
+        result['xmax'] = x_max
+        result['ymax'] = y_max
 
-        mean, std = cv2.meanStdDev(img, mask=mask)
-        mean = mean[::-1].squeeze()/255
-        std = std[::-1].squeeze()/255
-        print('Mean, std: ', mean, std)
-        result['mean'] = mean
-        result['std'] = std
-        if stats is not None:
-            stats.append(np.array([mean, std]))
-            if len(stats) % 10 == 0:
-                print("Current avg mean, std:")
-                statss = np.array(stats)
-                print(np.mean(statss, axis=0))
+        if self.calc_stats:
+            mean, std = cv2.meanStdDev(img, mask=mask)
+            mean = mean[::-1].squeeze()/255
+            std = std[::-1].squeeze()/255
+            print('Mean, std: ', mean, std)
+            result['mean'] = mean
+            result['std'] = std
+            if stats is not None:
+                stats.append(np.array([mean, std]))
+                if len(stats) % 10 == 0:
+                    print("Current avg mean, std:")
+                    statss = np.array(stats)
+                    print(np.mean(statss, axis=0))
 
         if self.reflect:
             border = cv2.BORDER_REFLECT_101
@@ -121,7 +124,6 @@ class Process(object):
         yxc = self.coords_by_file.get_group(frel).as_matrix(columns=['y_coord', 'x_coord', 'category'])
 
         targets = []
-        write_scaled_pngs = False
         for cat_idx, cat_name in enumerate(CATEGORIES):
             yx = yxc[yxc[:, 2] == cat_idx][:, :2]
             yx += [y_min, x_min]
@@ -145,7 +147,7 @@ class Process(object):
 
             targets.append(target_img.astype(np.float32))
             test_sum = np.sum(target_img) / 1024
-            if write_scaled_pngs:
+            if self.write_scaled_pngs:
                 INT_SCALE = np.iinfo(np.uint16).max / 32
                 target_img_uint16 = target_img * INT_SCALE
                 target_img_uint16 = target_img_uint16.astype('uint16')
@@ -185,9 +187,10 @@ class Process(object):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('data', metavar='DIR', help='path to dataset')
     args = parser.parse_args()
 
-    root_path = '/data/x/sealion/'
+    root_path = args.data
     dest_name = 'Train_processed'
     counts_filename = 'Train/train.csv'
     coords_filename = 'Train/correct_coords.csv'
