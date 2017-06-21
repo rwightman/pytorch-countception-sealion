@@ -4,75 +4,21 @@ import torch
 import torch.utils.data as data
 from torch.utils.data.sampler import Sampler
 from torchvision import datasets, transforms
+from PIL import Image
+import torchvision.utils as tvutils
 import random
 import pandas as pd
 import numpy as np
 import os
 import functools
 import time
-from contextlib import contextmanager
 import mytransforms
+import utils
+import utils_cython
 
 IMG_EXTENSIONS = ['.jpg', '.jpeg', '.png']
 CATEGORIES = ["adult_males", "subadult_males", "adult_females", "juveniles", "pups"]
 CATEGORY_MAP = {"adult_males": 0, "subadult_males": 1, "adult_females": 2, "juveniles": 3, "pups": 4}
-
-
-@contextmanager
-def measure_time(title='unknown'):
-    t1 = time.clock()
-    yield
-    t2 = time.clock()
-    print('%s: %0.2f seconds elapsed' % (title, t2-t1))
-
-
-def get_crop_size(target_w, target_h, angle, scale):
-    crop_w = target_w
-    crop_h = target_h
-    if angle:
-        corners = np.array(
-            [[target_w/2, -target_w/2, -target_w/2, target_w/2],
-            [target_h/2, target_h/2, -target_h/2, -target_h/2]])
-        s = np.sin(angle * np.pi/180)
-        c = np.cos(angle * np.pi/180)
-        M = np.array([[c, -s], [s, c]])
-        rotated_corners = np.dot(M, corners)
-        crop_w = 2 * np.max(np.abs(rotated_corners[0, :]))
-        crop_h = 2 * np.max(np.abs(rotated_corners[1, :]))
-    crop_w = int(np.ceil(crop_w / scale))
-    crop_h = int(np.ceil(crop_h / scale))
-    #print(crop_w, crop_h)
-    return crop_w, crop_h
-
-
-def crop_around(img, cx, cy, crop_w, crop_h):
-    img_h, img_w = img.shape[:2]
-    trunc_top = trunc_bottom = trunc_left = trunc_right = 0
-    left = cx - crop_w//2
-    if left < 0:
-        trunc_left = 0 - left
-        left = 0
-    right = left - trunc_left + crop_w
-    if right > img_w:
-        trunc_right = right - img_w
-        right = img_w
-    top = cy - crop_h//2
-    if top < 0:
-        trunc_top = 0 - top
-        top = 0
-    bottom = top - trunc_top + crop_h
-    if bottom > img_h:
-        trunc_bottom = bottom - img_h
-        bottom = img_h
-    if trunc_left or trunc_right or trunc_top or trunc_bottom:
-        #print('truncated, %d, %d, %d, %d' % (cx, cy, crop_w, crop_h))
-        img_new = np.zeros((crop_h, crop_w, img.shape[2]), dtype=img.dtype)
-        trunc_bottom = crop_h - trunc_bottom
-        trunc_right = crop_w - trunc_right
-        img_new[trunc_top:trunc_bottom, trunc_left:trunc_right] = img[top:bottom, left:right]
-        return img_new
-    else:
-        return img[top:bottom, left:right]
 
 
 def to_tensor(arr):
@@ -84,14 +30,22 @@ def to_tensor(arr):
     return t
 
 
-def find_inputs(folder, types=IMG_EXTENSIONS):
+def find_inputs(folder, types=IMG_EXTENSIONS, extract_extra=False):
     inputs = []
     for root, _, files in os.walk(folder, topdown=False):
         for rel_filename in files:
             base, ext = os.path.splitext(rel_filename)
             if ext.lower() in types:
                 abs_filename = os.path.join(root, rel_filename)
-                inputs.append((int(base), abs_filename))
+                if extract_extra:
+                    img = Image.open(abs_filename)
+                    if not img:
+                        continue
+                    w, h = img.size
+                    info = dict(filename=abs_filename, width=w, height=h, xmin=0, ymin=0, xmax=w, ymax=h)
+                else:
+                    info = dict(filename=abs_filename)
+                inputs.append((int(base), info))
     if inputs:
         return zip(*sorted(inputs, key=lambda k: k[0]))
     else:
@@ -154,34 +108,41 @@ def gen_mask(input_img, dotted_file):
     return img_masked, mask
 
 
-class SampleTileIndex:
-    def __init__(self, sample_index, tile_index=0):
-        self.sample_index = sample_index
-        self.tile_index = tile_index
+class ImagePatchIndex:
+    def __init__(self, image_index, patch_index=0):
+        self.image_index = image_index
+        self.patch_index = patch_index
 
 
-class SequentialTileSampler(Sampler):
-    """Samples tiles across images sequentially, always in the same order.
+class IndexedPatchSampler(Sampler):
+    """Samples patches across images sequentially by index, always in the same order.
     """
 
     def __init__(self, data_source):
-        self.num_samples = len(data_source)
-        #self.sample_tile_map = data_source.sample_tile_map
-        #FIXME not complete
+        self.num_images = len(data_source)
+        if data_source.patch_count:
+            self.num_patches = data_source.patch_count
+            self.patch_index = data_source.patch_index
+        else:
+            # fallback to indexing whole images from dataset
+            print('Warning: Data source has no patch information, falling back to whole image indexing.')
+            self.num_patches = 0
+            self.patch_index = []
 
     def __iter__(self):
-        samples = range(self.num_samples)
-        return iter(samples)
-        #for i in samples:
-        #    for t in self.sample_tile_map[i]:
-        #        yield SampleTileIndex(i, t)
+        if self.num_patches:
+            for i in range(self.num_images):
+                for j in self.patch_index[i]:
+                    yield ImagePatchIndex(i, j)
+        else:
+            return iter(range(self.num_images))
 
     def __len__(self):
-        return self.num_samples # FIXME add up tiles
+        return self.num_patches if self.num_patches else self.num_images
 
 
-class RandomTileSampler(Sampler):
-    """Oversamples random tiles from images in random order.
+class RandomPatchSampler(Sampler):
+    """Oversamples random patches from images in random order.
         Repeats the same image index multiple times in a row to sample 'repeat' times
         from the same image for big read efficiency gains.
     """
@@ -192,13 +153,13 @@ class RandomTileSampler(Sampler):
 
     def __iter__(self):
         # There are simpler/more compact ways of doing this, but why not have a somewhat
-        # meaningful fake tile index?
+        # meaningful fake patch index?
         for to in range(self.oversample//self.repeat):
             samples = torch.randperm(self.num_samples).long()
             for image_index in samples:
                 for ti in range(self.repeat):
-                    tile_index = to * self.repeat + ti
-                    yield SampleTileIndex(image_index, tile_index)
+                    fake_patch_index = to * self.repeat + ti
+                    yield ImagePatchIndex(image_index, fake_patch_index)
 
     def __len__(self):
         return self.num_samples * self.oversample
@@ -213,23 +174,40 @@ class SealionDataset(data.Dataset):
             coords_file='',
             processing_file='',
             train=True,
-            tile_size=[256, 256],
+            patch_size=[256, 256],
+            patch_stride=128,
             transform=None,
             target_transform=None):
 
-        input_ids, input_paths = find_inputs(input_root, types=['.jpg'])
+        extract_extra = False if os.path.exists(processing_file) else True
+        input_ids, input_infos = find_inputs(
+            input_root, types=['.jpg'], extract_extra=extract_extra)
         if len(input_ids) == 0:
             raise(RuntimeError("Found 0 images in : " + input_root))
         self.input_index = input_ids
-        self.data_by_id = {k: {'input': v} for k, v in zip(input_ids, input_paths)}
+
+        self.patch_index = [[]] * len(input_ids)
+        self.patch_count = 0
+        self.patch_size = patch_size
+        self.patch_stride = patch_stride
+
+        self.data_by_id = defaultdict(dict)
+        for index, (k, v) in enumerate(zip(input_ids, input_infos)):
+            if 'width' in v:
+                patch_info = self._calc_patch_info(v)
+                num_patches = patch_info['num']
+                self.patch_index[index] = list(range(num_patches))
+                self.patch_count += num_patches
+                v['patches'] = patch_info
+            v['index'] = index
+            self.data_by_id[k].update(v)
 
         self.has_targets = False
         if os.path.exists(target_root):
             targets = find_targets(target_root, input_ids, types=['.npz'])
             if len(targets):
                 for k, v in targets.items():
-                    d = self.data_by_id[k]
-                    d['target'] = v
+                    self.data_by_id[k]['target'] = v
                 self.has_targets = True
             else:
                 raise (RuntimeError("Found 0 targets in : " + target_root))
@@ -249,14 +227,20 @@ class SealionDataset(data.Dataset):
 
         if processing_file:
             process_df = pd.read_csv(processing_file, index_col=False)
-            cols = ['x_offset', 'y_offset', 'width', 'height']
+            cols = ['xmin', 'ymin', 'xmax', 'ymax', 'width', 'height']
             process_df[cols] = process_df[cols].astype(int)
             process_df['train_id'] = process_df.filename.map(lambda x: int(os.path.splitext(x)[0]))
             process_df.set_index(['train_id'], inplace=True)
             for k, v in process_df[cols].to_dict(orient='index').items():
-                if k in self.data_by_id:
-                    d = self.data_by_id[k]
-                    d['process'] = v
+                d = self.data_by_id[k]
+                if d is not None:
+                    patch_info = self._calc_patch_info(v)
+                    num_patches = patch_info['num']
+                    self.patch_index[d['index']] = list(range(num_patches))
+                    self.patch_count += num_patches
+                    v['patches'] = patch_info
+                    d.update(v)
+                    #print(d, self.patch_count)
 
         if coords_file:
             coords_df = pd.read_csv(coords_file, index_col=False)
@@ -271,12 +255,10 @@ class SealionDataset(data.Dataset):
                 fid = int(os.path.splitext(file)[0])
                 if fid in self.data_by_id:
                     d = self.data_by_id[fid]
-                    if 'process' in d:
-                        xy_offset = np.array([d['process']['x_offset'], d['process']['y_offset']])
-                        coords[:, :2] = coords[:, :2] + xy_offset
+                    xy_offset = np.array([d['xmin'], d['ymin']])
+                    coords[:, :2] = coords[:, :2] + xy_offset
                     d['coords'] = coords
 
-        self.tile_size = tile_size
         self.dataset_mean = [0.43632373, 0.46022959, 0.4618598]
         self.dataset_std = [0.17749958, 0.16631233, 0.16272708]
         if transform is None:
@@ -292,10 +274,43 @@ class SealionDataset(data.Dataset):
                     transforms.Normalize(self.dataset_mean, self.dataset_std)
                 ])
         self.target_transform = target_transform
+        self.ttime = utils.AverageMeter()
+
+    def _calc_patch_info(self, input_info):
+        x_min = input_info['xmin']
+        x_max = input_info['xmax']
+        y_min = input_info['ymin']
+        y_max = input_info['ymax']
+        assert y_max > y_min and x_max > x_min
+        buffer_w = input_info['width']
+        buffer_h = input_info['height']
+        box_w = x_max - x_min
+        box_h = y_max - y_min
+        # FIXME switch to use bbox constraints
+        num_patches, patch_cols, patch_rows = utils.calc_num_patches(
+            buffer_w, buffer_h, self.patch_size, self.patch_stride)
+        patch_origin_x = 0
+        patch_origin_y = 0
+        # if we have a bounding box border, see if we can squeeze an extra box in each dimension
+        # if x_min != 0 or x_max != buffer_w:
+        #     new_w = patch_cols * stride + patch_size[0]
+        #     print(new_w, buffer_w)
+        #     if new_w <= buffer_w:
+        #         patch_cols += 1
+        #         patch_origin_x = x_min - (new_w - box_w) // 2
+        # if y_min != 0 or y_max != buffer_h:
+        #     new_h = patch_rows * stride + patch_size[1]
+        #     if new_h <= buffer_h:
+        #         patch_rows += 1
+        #         patch_origin_y = y_min - (new_h - box_h) // 2
+        num_patches = patch_cols * patch_rows
+        patch_info = dict(
+            num=num_patches, cols=patch_cols, rows=patch_rows, origin_x=patch_origin_x, origin_y=patch_origin_y)
+        return patch_info
 
     @functools.lru_cache(4)
     def _load_input(self, input_id):
-        path = self.data_by_id[input_id]['input']
+        path = self.data_by_id[input_id]['filename']
         print("Loading %s" % path)
         if os.path.splitext(path)[1] == '.npy':
             img = np.load(path)
@@ -317,34 +332,42 @@ class SealionDataset(data.Dataset):
             target = target.astype(np.float32, copy=False)
         return target
 
-    def _indexed_tile_center(self, input_id, index):
+    def _indexed_patch_center(self, input_id, patch_index):
         d = self.data_by_id[input_id]
-        cx, cy = 0, 0
+        patch_info = d['patches']
+        #patch_index = patch_index % patch_info['num']
+        pc, pr = utils.index_to_rc(patch_index, patch_info['cols'])
+        cx = pc * self.patch_stride + self.patch_size[0] // 2
+        cy = pr * self.patch_stride + self.patch_size[1] // 2
+        #print(patch_index, cx, cy)
         return cx, cy
 
-    def _random_tile_center(self, input_id, w, h):
+    def _random_patch_center(self, input_id, w, h):
         d = self.data_by_id[input_id]
         if len(d['coords']) and random.random() < 0.4:
             # 40% of the time, randomly pick a point around an actual sealion
             cx, cy, _ = d['coords'][random.randint(0, len(d['coords']) - 1)]
-            cx = cx + random.randint(-self.tile_size[0]//4, self.tile_size[0]//4)
-            cy = cy + random.randint(-self.tile_size[1]//4, self.tile_size[1]//4)
+            cx = cx + random.randint(-self.patch_size[0] // 4, self.patch_size[0] // 4)
+            cy = cy + random.randint(-self.patch_size[1] // 4, self.patch_size[1] // 4)
         else:
-            # return random center coords for specified tile size within a specified (x, y, w, h) bounding box
-            tw, th = self.tile_size[0] // 2, self.tile_size[0]//2
-            x_min = tw
-            x_max = w - tw
-            y_min = th
-            y_max = h - th
-            if 'process' in d:
-                p = d['process']
-                xo, yo = p['x_offset'], p['y_offset']
-                ow, oh = p['width'], p['height']
-                x_min += xo
-                x_max -= w - ow - xo
-                y_min += yo
-                y_max -= h - oh - yo
-                #print(x_min, x_max, y_min, y_max, w, h, ow, oh)
+            # return random center coords for specified patch size within a specified (x, y, w, h) bounding box
+            pw, ph = self.patch_size[0] // 2, self.patch_size[1] // 2
+            if 'xmin' in d:
+                x_min = d['xmin']
+                x_max = d['xmax']
+                y_min = d['ymin']
+                y_max = d['ymax']
+                assert x_max <= w and x_max - x_min > 0
+                assert y_max <= h and y_max - y_min > 0
+            else:
+                x_min = 0
+                x_max = w
+                y_min = 0
+                y_max = h
+            x_min += pw
+            x_max -= pw
+            y_min += ph
+            y_max -= ph
             assert x_max - x_min > 0 and y_max - y_min > 0
             cx = random.randint(x_min, x_max)
             cy = random.randint(y_min, y_max)
@@ -368,22 +391,22 @@ class SealionDataset(data.Dataset):
             hflip = False
             vflip = False
 
-        crop_w, crop_h = get_crop_size(self.tile_size[0], self.tile_size[1], angle, scale)
-        input_tile = crop_around(input_img, cx, cy, crop_w, crop_h)
+        crop_w, crop_h = utils.calc_crop_size(self.patch_size[0], self.patch_size[1], angle, scale)
+        input_tile = utils.crop_around(input_img, cx, cy, crop_w, crop_h)
         if transform_target:
-            target_tile = crop_around(target_arr, cx, cy, crop_w, crop_h)
+            target_tile = utils.crop_around(target_arr, cx, cy, crop_w, crop_h)
 
         # Perform tile geometry transforms if needed
         if angle or scale != 1. or hflip or vflip:
             Mtrans = np.identity(3)
-            Mtrans[0, 2] = (self.tile_size[0] - crop_w) // 2
-            Mtrans[1, 2] = (self.tile_size[1] - crop_h) // 2
+            Mtrans[0, 2] = (self.patch_size[0] - crop_w) // 2
+            Mtrans[1, 2] = (self.patch_size[1] - crop_h) // 2
             if hflip:
                 Mtrans[0, 0] *= -1
-                Mtrans[0, 2] = self.tile_size[0] - Mtrans[0, 2]
+                Mtrans[0, 2] = self.patch_size[0] - Mtrans[0, 2]
             if vflip:
                 Mtrans[1, 1] *= -1
-                Mtrans[1, 2] = self.tile_size[1] - Mtrans[1, 2]
+                Mtrans[1, 2] = self.patch_size[1] - Mtrans[1, 2]
 
             if angle or scale != 1.:
                 Mrot = cv2.getRotationMatrix2D((crop_w//2, crop_h//2), angle, scale)
@@ -392,10 +415,10 @@ class SealionDataset(data.Dataset):
                 Mfinal = Mtrans
 
             #print(input_tile.shape)
-            input_tile = cv2.warpAffine(input_tile, Mfinal[:2, :], tuple(self.tile_size))
+            input_tile = cv2.warpAffine(input_tile, Mfinal[:2, :], tuple(self.patch_size))
             if transform_target:
                 tt64 = target_tile.astype(np.float64)
-                tt64 = cv2.warpAffine(tt64, Mfinal[:2, :], tuple(self.tile_size))
+                tt64 = cv2.warpAffine(tt64, Mfinal[:2, :], tuple(self.patch_size))
                 if scale != 1.:
                     tt64 /= scale**2
                 target_tile = tt64.astype(np.float32)
@@ -403,65 +426,109 @@ class SealionDataset(data.Dataset):
         return input_tile, target_tile
 
     def __getitem__(self, index):
-        if isinstance(index, SampleTileIndex):
-            tile = index.tile_index
-            index = index.sample_index
+        if isinstance(index, ImagePatchIndex):
+            patch_index = index.patch_index
+            index = index.image_index
         else:
-            tile = 0  #FIXME sort this out
+            patch_index = 0  #FIXME sort this out
 
         input_id = self.input_index[index % len(self)]
         input_img = self._load_input(input_id)
-        #print(input_id, index, tile)
-
+        #print(input_id, index, patch_index)
+        h, w = input_img.shape[:2]
         if self.train:
             target_arr = self._load_target(input_id)
-            h, w = input_img.shape[:2]
-            attempts = 32
+            test_patch = False
+            if test_patch:
+                print(w, h)
+                num_patch = utils.calc_num_patches(w, h, self.patch_size, self.patch_stride)
+                view, view_rc = utils.patch_view(target_arr, self.patch_size, self.patch_stride)
+                assert num_patch[0] == view.shape[0] and num_patch[1] == view_rc[1] and num_patch[2] == view_rc[0]
+                print('view', view.shape, view_rc, num_patch)
+                reconstruct_target = np.zeros(target_arr.shape, dtype=target_arr.dtype)
+                start = time.time()
+                utils_cython.merge_patches_float32(
+                    reconstruct_target, view, view_rc[1], self.patch_size, self.patch_stride)
+                self.ttime.update(time.time() - start)
+                print(self.ttime.val, self.ttime.avg)
+                print(reconstruct_target.sum(), target_arr.sum())
+
+            attempts = 16
             for i in range(attempts):
-                tw, th = self.tile_size
-                cx, cy = self._random_tile_center(input_id, w, h)
-                input_tile, target_tile = self._crop_and_transform(cx, cy, input_img, target_arr, randomize=True)
-                # check centre of chosen tile for valid pixels
-                if np.any(crop_around(input_tile, tw//2, th//2, tw//4, th//4)):
+                tw, th = self.patch_size
+                cx, cy = self._random_patch_center(input_id, w, h)
+                input_patch, target_patch = self._crop_and_transform(cx, cy, input_img, target_arr, randomize=True)
+                # check centre of chosen patch_index for valid pixels
+                if np.any(utils.crop_around(input_patch, tw//2, th//2, tw//4, th//4)):
                     break
-            input_tile_tensor = self.transform(input_tile)
-            target_tile_tensor = to_tensor(target_tile)
+            input_tile_tensor = self.transform(input_patch)
+            target_tile_tensor = to_tensor(target_patch)
         else:
             target_arr = None
             if self.has_targets:
                 target_arr = self._load_target(input_id)
-            cx, cy = self._indexed_tile_center(input_id, index)
-            input_tile, target_tile = self._crop_and_transform(cx, cy, input_img, target_arr, randomize=False)
-            input_tile_tensor = self.transform(input_tile)
-            if target_tile is None:
-                target_tile_tensor = torch.from_numpy(np.array([input_id, tile]))
+
+            test_patch = False
+            if test_patch:
+                def view_tensor(arr):
+                    assert (isinstance(arr, np.ndarray))
+                    t = torch.from_numpy(arr.transpose((0, 3, 1, 2)))
+                    # print(t.size())
+                    if isinstance(t, torch.ByteTensor):
+                        return t.float().div(255)
+                    return t
+
+                view, view_rc = utils.patch_view(input_img, self.patch_size, self.patch_stride)
+                print('view', view.shape, view_rc)
+                viewt = view_tensor(view)
+                tvutils.save_image(viewt, 'view-%d.jpg' % index, nrow=view_rc[1], normalize=True)
+
+                reconstruct_img = np.zeros((h, w, 3), dtype=np.uint8)
+                start = time.time()
+                utils_cython.merge_patches_uint8(reconstruct_img, view, view_rc[1], self.patch_size, self.patch_stride)
+                self.ttime.update(time.time() - start)
+                print(self.ttime.val, self.ttime.avg)
+
+                reconstruct_img = cv2.cvtColor(reconstruct_img, cv2.COLOR_RGB2BGR)
+                cv2.imwrite('borg-%d.jpg' % index, reconstruct_img)
+
+            cx, cy = self._indexed_patch_center(input_id, patch_index)
+            input_patch, target_patch = self._crop_and_transform(cx, cy, input_img, target_arr, randomize=False)
+            input_tile_tensor = self.transform(input_patch)
+            if target_patch is None:
+                target_tile_tensor = torch.zeros(1)
             else:
-                target_tile_tensor = to_tensor(target_tile)
+                target_tile_tensor = to_tensor(target_patch)
             #print(input_tile_tensor.size(), target_tile_tensor)
 
-        #cv2.imwrite('test-scaled-input-%d.png' % index, input_tile)
+        #cv2.imwrite('test-scaled-input-%d.png' % index, input_patch)
         #cv2.imwrite('test-scaled-target-%d.png' % index, 4096*target_tile[:, :, :3])
 
-        return input_tile_tensor, target_tile_tensor
+        index_tensor = torch.LongTensor([input_id, index, patch_index])
+
+        return input_tile_tensor, target_tile_tensor, index_tensor
 
     def __len__(self):
         return len(self.input_index)
 
+    def get_num_patches(self, input_id=None):
+        if input_id is None:
+            return self.patch_count
+        else:
+            if input_id in self.data_by_id:
+                return self.data_by_id[input_id]['patches']['num']
+            else:
+                return 0
 
-def combine_patches(output_img, patches, patch_size, stride, agg_fn=np.mean):
-    oh, ow = output_img.shape[:2]
-    pw, ph = patch_size
-    patch_rows = ow // pw + 1
-    for i in range(0, ow):
-        pi_left = ((i - pw) // stride) + 1
-        pi_right = i // stride + 1
-        for j in range(0, oh):
-            pj_top = ((j - ph) // stride) + 1
-            pj_bottom = j // stride + 1
-            agg = []
-            for pi in range(pi_left, pi_right):
-                for pj in range(pj_top, pj_bottom):
-                    px = i - pi * stride
-                    py = j - pj * stride
-                    agg.append(patches[pi + pj * patch_rows][px, py])
-            output_img[i, j] = agg_fn(agg)
+    def get_input_size(self, input_id):
+        if input_id in self.data_by_id:
+            d = self.data_by_id[input_id]
+            return d['width'], d['height']
+        else:
+            return 0, 0
+
+    def get_patch_cols(self, input_id):
+        if input_id in self.data_by_id:
+            return self.data_by_id[input_id]['patches']['cols']
+        else:
+            return 0

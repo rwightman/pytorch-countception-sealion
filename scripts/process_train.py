@@ -59,14 +59,14 @@ class Process(object):
 
         img = cv2.imread(fabs)
         h, w = img.shape[:2]
-        hb = int(math.ceil((h + self.bsize)/self.bsize) * self.bsize)
-        wb = int(math.ceil((w + self.bsize)/self.bsize) * self.bsize)
-        print(wb, hb)
-        y_diff = hb - h
+        wb = int(math.ceil((w + self.bsize) / self.bsize) * self.bsize)
+        hb = int(math.ceil((h + self.bsize) / self.bsize) * self.bsize)
         x_diff = wb - w
-        y_offset = y_diff // 2
-        x_offset = x_diff // 2
-        print(x_offset, y_offset)
+        y_diff = hb - h
+        x_min = x_diff // 2
+        y_min = y_diff // 2
+        x_max = x_min + w
+        y_max = y_min + h
 
         dotted_file = os.path.join(self.dotted_path, frel)
         if os.path.exists(dotted_file):
@@ -79,19 +79,19 @@ class Process(object):
             img = cv2.bitwise_and(img, img, mask=mask)
             # scale up the mask for targets
             mask = cv2.copyMakeBorder(
-                mask, y_offset, y_diff-y_offset, x_offset, x_diff-x_offset, cv2.BORDER_CONSTANT, (0, 0, 0))
+                mask, y_min, y_diff-y_min, x_min, x_diff-x_min, cv2.BORDER_CONSTANT, (0, 0, 0))
         else:
             print("No matching dotted file exists for %s, skipping..." % frel)
             return
 
         result = dict()
         result['filename'] = frel
-        result['height'] = h
-        result['width'] = w
-        result['buffer_height'] = hb
-        result['buffer_width'] = wb
-        result['x_offset'] = x_offset
-        result['y_offset'] = y_offset
+        result['height'] = hb
+        result['width'] = wb
+        result['xmax'] = x_max
+        result['ymax'] = y_max
+        result['xmin'] = x_min
+        result['ymin'] = y_min
 
         mean, std = cv2.meanStdDev(img, mask=mask)
         mean = mean[::-1].squeeze()/255
@@ -113,7 +113,7 @@ class Process(object):
             border = cv2.BORDER_CONSTANT
             value = (0, 0, 0)
 
-        img = cv2.copyMakeBorder(img, y_offset, y_diff-y_offset, x_offset, x_diff-x_offset, border, value)
+        img = cv2.copyMakeBorder(img, y_min, y_diff-y_min, x_min, x_diff-x_min, border, value)
         cv2.imwrite(os.path.join(self.output_path_inputs, frel), img)
         #cv2.imwrite(os.path.join(self.output_path_inputs, basename + '.png'), img)
 
@@ -124,7 +124,7 @@ class Process(object):
         write_scaled_pngs = False
         for cat_idx, cat_name in enumerate(CATEGORIES):
             yx = yxc[yxc[:, 2] == cat_idx][:, :2]
-            yx += [y_offset, x_offset]
+            yx += [y_min, x_min]
 
             gimg = np.zeros([hb, wb])
             for y, x in yx:
