@@ -29,6 +29,8 @@ parser.add_argument('--num-processes', type=int, default=2, metavar='N',
                     help='how many training processes to use (default: 2)')
 parser.add_argument('-r', '--restore_checkpoint', default=None,
                     help='path to restore checkpoint, e.g. ./checkpoint-1.tar')
+parser.add_argument('--no-cuda', action='store_true', default=False,
+                    help='disables CUDA training')
 
 COLS = ['test_id', 'adult_males', 'subadult_males', 'adult_females', 'juveniles', 'pups']
 
@@ -49,7 +51,8 @@ def main():
         dataset,
         batch_size=batch_size, shuffle=False, num_workers=args.num_processes, sampler=sampler)
     model = ModelCnet(outplanes=5)
-    model.cuda()
+    if not args.no_cuda:
+        model.cuda()
 
     if args.restore_checkpoint is not None:
         assert os.path.isfile(args.restore_checkpoint), '%s not found' % args.restore_checkpoint
@@ -71,7 +74,10 @@ def main():
     try:
         for batch_idx, (input, target, index) in enumerate(loader):
             data_time_m.update(time.time() - end)
-            input_var, target_var = autograd.Variable(input.cuda()), autograd.Variable(target.cuda())
+            if not args.no_cuda:
+                input_var, target_var = autograd.Variable(input.cuda()), autograd.Variable(target.cuda())
+            else:
+                input_var, target_var = autograd.Variable(input), autograd.Variable(target)
             output = model(input_var)
             output = output.permute(0, 2, 3, 1)
             output = output.cpu().data.numpy()

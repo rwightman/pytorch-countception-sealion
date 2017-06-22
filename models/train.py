@@ -43,7 +43,6 @@ parser.add_argument('--save-batches', action='store_true', default=False,
                     help='save images of batch inputs and targets every log interval for debugging/verification')
 
 
-
 def main():
     args = parser.parse_args()
 
@@ -64,7 +63,9 @@ def main():
         train_coords_file,
         train_process_file,
         train=True,
-        patch_size=patch_size)
+        patch_size=patch_size,
+        per_image_norm=True
+    )
     sampler = RandomPatchSampler(dataset, oversample=192, repeat=16)
     loader = data.DataLoader(
         dataset,
@@ -73,8 +74,10 @@ def main():
     if not args.no_cuda:
         model.cuda()
 
-    #optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = optim.SGD(
+        model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    #optimizer = optim.Adam(
+    #    model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     loss_fn = torch.nn.L1Loss() #torch.nn.MSELoss()
     # optionally resume from a checkpoint
 

@@ -88,7 +88,6 @@ def merge_patches_float32(
     cdef int pjl, pju
     cdef int pil, piu
     cdef double[:] agg = array.array('d', [0] * oc)
-    print(sizeof(agg))
     cdef int agg_count
     cdef int c
     #cdef double temp

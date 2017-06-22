@@ -31,6 +31,7 @@ class ModelCountception(nn.Module):
         self.inplanes = inplanes
         self.outplanes = outplanes
         self.activation = nn.LeakyReLU(0.2)
+        self.final_activation = nn.LeakyReLU(0.01)
         self.use_bn = True
         self.patch_size = 32
 
@@ -47,7 +48,7 @@ class ModelCountception(nn.Module):
         self.conv3 = conv_block(128, 32, ksize=20, activation=self.activation)
         self.conv4 = conv_block(32, 64, ksize=1, activation=self.activation)
         self.conv5 = conv_block(64, 64, ksize=1, activation=self.activation)
-        self.conv6 = conv_block(64, self.outplanes, ksize=1, activation=self.activation)
+        self.conv6 = conv_block(64, self.outplanes, ksize=1, activation=self.final_activation)
 
         # Weight initialization
         for m in self.modules():

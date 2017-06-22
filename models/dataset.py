@@ -24,7 +24,6 @@ CATEGORY_MAP = {"adult_males": 0, "subadult_males": 1, "adult_females": 2, "juve
 def to_tensor(arr):
     assert(isinstance(arr, np.ndarray))
     t = torch.from_numpy(arr.transpose((2, 0, 1)))
-    #print(t.size())
     if isinstance(t, torch.ByteTensor):
         return t.float().div(255)
     return t
@@ -63,7 +62,6 @@ def find_targets(folder, input_ids, types=IMG_EXTENSIONS):
                 fid = int(split[0])
                 if fid in inputs_set:
                     abs_filename = os.path.join(root, rel_filename)
-                    print(split)
                     if len(split) > 2:
                         targets[fid][int(split[2])] = abs_filename
                     else:
@@ -176,6 +174,7 @@ class SealionDataset(data.Dataset):
             train=True,
             patch_size=[256, 256],
             patch_stride=128,
+            per_image_norm=False,
             transform=None,
             target_transform=None):
 
@@ -262,17 +261,15 @@ class SealionDataset(data.Dataset):
         self.dataset_mean = [0.43632373, 0.46022959, 0.4618598]
         self.dataset_std = [0.17749958, 0.16631233, 0.16272708]
         if transform is None:
+            tfs = []
+            if per_image_norm:
+                tfs.append(mytransforms.NormalizeImg())
+            tfs.append(transforms.ToTensor())
             if self.train:
-                self.transform = transforms.Compose([
-                    transforms.ToTensor(),
-                    mytransforms.ColorJitter(),
-                    transforms.Normalize(self.dataset_mean, self.dataset_std)
-                ])
-            else:
-                self.transform = transforms.Compose([
-                    transforms.ToTensor(),
-                    transforms.Normalize(self.dataset_mean, self.dataset_std)
-                ])
+                tfs.append(mytransforms.ColorJitter())
+            if not per_image_norm:
+                tfs.append(transforms.Normalize(self.dataset_mean, self.dataset_std))
+            self.transform = transforms.Compose(tfs)
         self.target_transform = target_transform
         self.ttime = utils.AverageMeter()
 
@@ -335,11 +332,9 @@ class SealionDataset(data.Dataset):
     def _indexed_patch_center(self, input_id, patch_index):
         d = self.data_by_id[input_id]
         patch_info = d['patches']
-        #patch_index = patch_index % patch_info['num']
         pc, pr = utils.index_to_rc(patch_index, patch_info['cols'])
         cx = pc * self.patch_stride + self.patch_size[0] // 2
         cy = pr * self.patch_stride + self.patch_size[1] // 2
-        #print(patch_index, cx, cy)
         return cx, cy
 
     def _random_patch_center(self, input_id, w, h):
@@ -438,6 +433,7 @@ class SealionDataset(data.Dataset):
         h, w = input_img.shape[:2]
         if self.train:
             target_arr = self._load_target(input_id)
+
             test_patch = False
             if test_patch:
                 print(w, h)
@@ -461,6 +457,7 @@ class SealionDataset(data.Dataset):
                 # check centre of chosen patch_index for valid pixels
                 if np.any(utils.crop_around(input_patch, tw//2, th//2, tw//4, th//4)):
                     break
+
             input_tile_tensor = self.transform(input_patch)
             target_tile_tensor = to_tensor(target_patch)
         else:

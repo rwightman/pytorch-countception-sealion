@@ -1,5 +1,7 @@
 import torch
 import random
+import cv2
+import numpy as np
 
 ''' A few fb.resnet.torch like tranforms 
     Taken from https://github.com/pytorch/vision/pull/27
@@ -76,3 +78,20 @@ class ColorJitter(RandomOrder):
             self.transforms.append(Contrast(contrast))
         if saturation != 0:
             self.transforms.append(Saturation(saturation))
+
+
+class NormalizeImg:
+    """Normalize each image or patch by its own mean/std
+    """
+
+    def __init__(self):
+        pass
+
+    def __call__(self, img):
+        # This should still be a H x W x C Numpy/OpenCv compat image, not a Torch Tensor
+        assert isinstance(img, np.ndarray)
+        mean, std = cv2.meanStdDev(img)
+        mean, std = mean.astype(np.float32), std.astype(np.float32)
+        img = img.astype(np.float32)
+        img = (img - np.squeeze(mean)) / np.squeeze(std)
+        return img
