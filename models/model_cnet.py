@@ -84,7 +84,7 @@ class ModelCnet(nn.Module):
         if self.use_pad:
             self.conv_final = nn.Sequential(
                 nn.Conv2d(64, self.outplanes, kernel_size=1, stride=1),
-                nn.LeakyReLU(.01))
+                nn.ReLU())
         else:
             self.conv_final = nn.Sequential(
                 nn.Conv2d(64, self.outplanes, kernel_size=1, stride=1),

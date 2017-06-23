@@ -84,8 +84,8 @@ class NormalizeImg:
     """Normalize each image or patch by its own mean/std
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, std_epsilon=.0001):
+        self.std_epsilon = std_epsilon
 
     def __call__(self, img):
         # This should still be a H x W x C Numpy/OpenCv compat image, not a Torch Tensor
@@ -93,7 +93,7 @@ class NormalizeImg:
         mean, std = cv2.meanStdDev(img)
         mean, std = mean.astype(np.float32), std.astype(np.float32)
         img = img.astype(np.float32)
-        img = (img - np.squeeze(mean)) / np.squeeze(std)
+        img = (img - np.squeeze(mean)) / (np.squeeze(std) + self.std_epsilon)
         return img
 
 
