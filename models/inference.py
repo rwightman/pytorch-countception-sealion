@@ -45,11 +45,15 @@ def main():
     dataset = SealionDataset(
         test_input_root,
         train=False,
-        patch_size=patch_size)
+        patch_size=patch_size,
+        per_image_norm=True)
     sampler = IndexedPatchSampler(dataset)
     loader = data.DataLoader(
         dataset,
-        batch_size=batch_size, shuffle=False, num_workers=args.num_processes, sampler=sampler)
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=args.num_processes,
+        sampler=sampler)
     model = ModelCnet(outplanes=5)
     if not args.no_cuda:
         model.cuda()

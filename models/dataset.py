@@ -264,7 +264,7 @@ class SealionDataset(data.Dataset):
             tfs = []
             if per_image_norm:
                 tfs.append(mytransforms.NormalizeImg())
-            tfs.append(transforms.ToTensor())
+            tfs.append(mytransforms.ToTensor())
             if self.train:
                 tfs.append(mytransforms.ColorJitter())
             if not per_image_norm:

@@ -95,3 +95,14 @@ class NormalizeImg:
         img = img.astype(np.float32)
         img = (img - np.squeeze(mean)) / np.squeeze(std)
         return img
+
+
+class ToTensor:
+    def __call__(self, img):
+        assert isinstance(img, np.ndarray)
+        # handle numpy array
+        img = torch.from_numpy(img.transpose((2, 0, 1)))
+        if isinstance(img, torch.ByteTensor):
+            return img.float().div(255)
+        else:
+            return img
