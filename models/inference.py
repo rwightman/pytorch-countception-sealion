@@ -39,11 +39,13 @@ def main():
     args = parser.parse_args()
 
     test_input_root = os.path.join(args.data, 'Test')
+    processed_file = os.path.join(args.data, test_input_root, 'processed.csv')
 
     batch_size = args.batch_size
     patch_size = [384] * 2
     dataset = SealionDataset(
         test_input_root,
+        processing_file=processed_file,
         train=False,
         patch_size=patch_size,
         per_image_norm=True)

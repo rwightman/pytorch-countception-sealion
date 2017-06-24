@@ -49,7 +49,7 @@ def main():
     processed_base = 'Train-processed-2'
     train_input_root = os.path.join(args.data, processed_base, 'inputs')
     train_target_root = os.path.join(args.data,  processed_base, 'targets')
-    train_process_file = os.path.join(args.data, processed_base, 'process.csv')
+    train_process_file = os.path.join(args.data, processed_base, 'processed.csv')
     train_counts_file = os.path.join(args.data, 'Train/train.csv')
     train_coords_file = os.path.join(args.data, 'Train/correct_coords.csv')
 
