@@ -43,6 +43,7 @@ def main():
 
     batch_size = args.batch_size
     patch_size = [384] * 2
+    num_outputs = 5
     dataset = SealionDataset(
         test_input_root,
         processing_file=processed_file,
@@ -56,7 +57,7 @@ def main():
         shuffle=False,
         num_workers=args.num_processes,
         sampler=sampler)
-    model = ModelCnet(outplanes=5)
+    model = ModelCnet(outplanes=num_outputs)
     if not args.no_cuda:
         model.cuda()
 
@@ -64,7 +65,6 @@ def main():
         assert os.path.isfile(args.restore_checkpoint), '%s not found' % args.restore_checkpoint
         checkpoint = torch.load(args.restore_checkpoint)
         model.load_state_dict(checkpoint['state_dict'])
-        #step = model.load(args.restore_checkpoint)
         print('Model restored from file: %s' % args.restore_checkpoint)
 
     model.eval()
@@ -75,8 +75,6 @@ def main():
     current_id = -1
     patches = []
     results = []
-    last_batch = -1
-    last_index = None
     try:
         for batch_idx, (input, target, index) in enumerate(loader):
             data_time_m.update(time.time() - end)
@@ -95,9 +93,9 @@ def main():
                     current_id = input_id
                 elif current_id != input_id:
                     # reconstruct output image from patches
-                    w, h = dataset.get_input_size(input_id)
-                    cols = dataset.get_patch_cols(input_id)
-                    output_arr = np.zeros((h, w, 5), dtype=np.float32)
+                    w, h = dataset.get_input_size(current_id)
+                    cols = dataset.get_patch_cols(current_id)
+                    output_arr = np.zeros((h, w, num_outputs), dtype=np.float32)
                     patches_arr = np.stack(patches)
                     merge_patches_float32(output_arr, patches_arr, cols, dataset.patch_size, dataset.patch_stride)
                     counts = list(np.sum(output_arr, axis=(0, 1)) / 1024.)
