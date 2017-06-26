@@ -50,7 +50,7 @@ def calc_crop_size(target_w, target_h, angle, scale):
     return crop_w, crop_h
 
 
-def crop_around(img, cx, cy, crop_w, crop_h):
+def crop_center(img, cx, cy, crop_w, crop_h):
     img_h, img_w = img.shape[:2]
     trunc_top = trunc_bottom = trunc_left = trunc_right = 0
     left = cx - crop_w//2
@@ -77,6 +77,22 @@ def crop_around(img, cx, cy, crop_w, crop_h):
         return img_new
     else:
         return img[top:bottom, left:right]
+
+
+def crop_points_center(points, cx, cy, crop_w, crop_h):
+    xl = cx - crop_w // 2
+    xu = xl + crop_w
+    yl = cy - crop_h // 2
+    yu = yl + crop_h
+    mask = (points[:, 0] >= xl) & (points[:, 0] < xu) & (points[:, 1] >= yl) & (points[:, 1] < yu)
+    return points[mask]
+
+
+def crop_points(points, x, y, crop_w, crop_h):
+    xu = x + crop_w
+    yu = y + crop_h
+    mask = (points[:, 0] >= x) & (points[:, 0] < xu) & (points[:, 1] >= y) & (points[:, 1] < yu)
+    return points[mask]
 
 
 def calc_num_patches(img_w, img_h, patch_size, stride):

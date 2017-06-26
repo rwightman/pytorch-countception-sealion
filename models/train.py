@@ -46,7 +46,7 @@ parser.add_argument('--save-batches', action='store_true', default=False,
 def main():
     args = parser.parse_args()
 
-    processed_base = 'Train-processed-2'
+    processed_base = 'Train-processed'
     train_input_root = os.path.join(args.data, processed_base, 'inputs')
     train_target_root = os.path.join(args.data,  processed_base, 'targets')
     train_process_file = os.path.join(args.data, processed_base, 'processed.csv')
@@ -55,7 +55,8 @@ def main():
 
     batch_size = args.batch_size
     num_epochs = 1000
-    patch_size = [384] * 2
+    patch_size = [256] * 2
+    num_outputs = 5
     dataset = SealionDataset(
         train_input_root,
         train_target_root,
@@ -64,13 +65,16 @@ def main():
         train_process_file,
         train=True,
         patch_size=patch_size,
+        target_type="countception",
+        generate_target=True,
         per_image_norm=True
     )
     sampler = RandomPatchSampler(dataset, oversample=192, repeat=16)
     loader = data.DataLoader(
         dataset,
         batch_size=batch_size, shuffle=True, num_workers=args.num_processes, sampler=sampler)
-    model = ModelCnet(outplanes=5)
+    #model = ModelCnet(outplanes=num_outputs)
+    model = ModelCountception(outplanes=num_outputs)
     if not args.no_cuda:
         model.cuda()
 

@@ -19,6 +19,7 @@ import utils_cython
 IMG_EXTENSIONS = ['.jpg', '.jpeg', '.png']
 CATEGORIES = ["adult_males", "subadult_males", "adult_females", "juveniles", "pups"]
 CATEGORY_MAP = {"adult_males": 0, "subadult_males": 1, "adult_females": 2, "juveniles": 3, "pups": 4}
+TARGET_TYPES = ['density', 'countception']
 
 
 def to_tensor(arr):
@@ -69,33 +70,34 @@ def find_targets(folder, input_ids, types=IMG_EXTENSIONS):
     return targets
 
 
-def gen_target(input_id, input_img, coords, boxes, input_mask=None):
-    #FIXME on the fly gen of target patches work in progress
-    h, w = input_img.shape[:2]
-
+def gen_target_gauss(coords, size, sigma=5, kernel_size=(21, 21), factor=1024.):
+    w, h = size
+    num_outputs = len(CATEGORIES)
+    target_img = np.zeros(shape=(h, w, num_outputs), dtype=np.float32)
     for cat_idx, cat_name in enumerate(CATEGORIES):
-        yx = coords[coords[:, 2] == cat_idx][:, :2]
+        xy = coords[coords[:, 2] == cat_idx][:, :2]
+        for x, y in xy:
+            target_img[y, x, cat_idx] += factor
+    target_img = cv2.GaussianBlur(target_img, kernel_size, sigma, borderType=cv2.BORDER_CONSTANT)
+    return target_img
 
-        #FIXME bbox calcs
 
-        timg = np.zeros([h, w])
-        for y, x in yx:
-            timg[y, x] += 25.
-
-        # OpenCV guassian blur
-        timg = cv2.GaussianBlur(timg, (15, 15), 3, borderType=cv2.BORDER_REFLECT_101)
-        if input_mask:
-            timg = cv2.bitwise_and(timg, timg, mask=input_mask)
-
-        if True:
-            print(np.min(timg), np.max(timg))
-            test_sum = np.sum(timg) / 25
-            ui16 = np.iinfo(np.uint16)
-            test_sum = test_sum * ui16.max
-            test_sum = test_sum.astype('uint16')
-            test_float = test_float / ui16.max
-            test_float_sum = np.sum(test_float) / 25
-            print(test_sum, test_float_sum)
+def gen_target_countception(coords, size, subpatch_size=32, stride=1):
+    w, h = size
+    pad = (subpatch_size - 1) // 2
+    w = (w + 2 * pad) // stride
+    h = (h + 2 * pad) // stride
+    #print(size, w, h)
+    num_outputs = len(CATEGORIES)
+    coords_pad = coords.copy()
+    coords_pad[:, :2] = coords[:, :2] + [subpatch_size, subpatch_size]
+    target_img = np.zeros(shape=(h, w, num_outputs), dtype=np.float32)
+    for x in range(w):
+        for y in range(h):
+            subpatch_points = utils.crop_points(coords, x * stride, y * stride, subpatch_size, subpatch_size)
+            for p in subpatch_points:
+                target_img[y][x][p[2]] += 1.
+    return target_img
 
 
 def gen_mask(input_img, dotted_file):
@@ -174,6 +176,8 @@ class SealionDataset(data.Dataset):
             train=True,
             patch_size=[256, 256],
             patch_stride=128,
+            generate_target=True,
+            target_type='density',
             per_image_norm=False,
             transform=None,
             target_transform=None):
@@ -189,6 +193,9 @@ class SealionDataset(data.Dataset):
         self.patch_count = 0
         self.patch_size = patch_size
         self.patch_stride = patch_stride
+        assert target_type in TARGET_TYPES
+        self.target_type = target_type
+        self.generate_target = generate_target  # generate on the fly instead of loading
 
         self.data_by_id = defaultdict(dict)
         for index, (k, v) in enumerate(zip(input_ids, input_infos)):
@@ -250,7 +257,7 @@ class SealionDataset(data.Dataset):
             for file in groupby_file.indices:
                 coords = groupby_file.get_group(file)
                 coords = coords[['x_coord', 'y_coord', 'category']].as_matrix()
-                coords.sort(axis=0)
+                coords = coords[coords[:, 0].argsort()]
                 fid = int(os.path.splitext(file)[0])
                 if fid in self.data_by_id:
                     d = self.data_by_id[fid]
@@ -371,6 +378,8 @@ class SealionDataset(data.Dataset):
     def _crop_and_transform(self, cx, cy, input_img, target_arr, randomize=False):
         target_tile = None
         transform_target = False if target_arr is None else True
+        target_is_coords = True if target_arr.shape[1] == 3 else False
+
         if randomize:
             angle = 0.
             hflip = random.random() < 0.5
@@ -387,9 +396,16 @@ class SealionDataset(data.Dataset):
             vflip = False
 
         crop_w, crop_h = utils.calc_crop_size(self.patch_size[0], self.patch_size[1], angle, scale)
-        input_tile = utils.crop_around(input_img, cx, cy, crop_w, crop_h)
+        input_tile = utils.crop_center(input_img, cx, cy, crop_w, crop_h)
         if transform_target:
-            target_tile = utils.crop_around(target_arr, cx, cy, crop_w, crop_h)
+            if target_is_coords:
+                target_points = target_arr.copy()
+                target_points = utils.crop_points_center(target_points, cx, cy, crop_w, crop_h)
+                #print(cx, cy, crop_w, crop_h, angle, scale, hflip, vflip)
+                #print(target_points)
+                target_points[:, :2] = target_points[:, :2] - [cx, cy]
+            else:
+                target_tile = utils.crop_center(target_arr, cx, cy, crop_w, crop_h)
 
         # Perform tile geometry transforms if needed
         if angle or scale != 1. or hflip or vflip:
@@ -409,15 +425,31 @@ class SealionDataset(data.Dataset):
             else:
                 Mfinal = Mtrans
 
-            #print(input_tile.shape)
             input_tile = cv2.warpAffine(input_tile, Mfinal[:2, :], tuple(self.patch_size))
             if transform_target:
-                tt64 = target_tile.astype(np.float64)
-                tt64 = cv2.warpAffine(tt64, Mfinal[:2, :], tuple(self.patch_size))
-                if scale != 1.:
-                    tt64 /= scale**2
-                target_tile = tt64.astype(np.float32)
+                if target_is_coords:
+                    if len(target_points):
+                        target_cats = target_points[:, 2].copy()
+                        target_points[:, 2] = np.ones(len(target_points))
+                        target_points = np.dot(target_points, Mfinal)
+                        #print(target_points)
+                        target_points[:, 2] = target_cats
+                else:
+                    tt64 = target_tile.astype(np.float64)
+                    tt64 = cv2.warpAffine(tt64, Mfinal[:2, :], tuple(self.patch_size))
+                    if scale != 1.:
+                        tt64 /= scale**2
+                    target_tile = tt64.astype(np.float32)
 
+        if target_is_coords:
+            target_points = np.rint(target_points).astype(np.int)
+            target_points[:, :2] = target_points[:, :2] + [self.patch_size[0] // 2, self.patch_size[1] // 2]
+            target_points = utils.crop_points(target_points, 0, 0, self.patch_size[0], self.patch_size[1])
+            #print(target_points)
+            if self.target_type == 'countception':
+                target_tile = gen_target_countception(target_points, self.patch_size)
+            else:
+                target_tile = gen_target_gauss(target_points, self.patch_size)
         return input_tile, target_tile
 
     def __getitem__(self, index):
@@ -432,7 +464,11 @@ class SealionDataset(data.Dataset):
         #print(input_id, index, patch_index)
         h, w = input_img.shape[:2]
         if self.train:
-            target_arr = self._load_target(input_id)
+            if self.generate_target:
+                target_arr = self.data_by_id[input_id]['coords']
+            else:
+                target_arr = self._load_target(input_id)
+            #print(target_arr.shape)
 
             test_patch = False
             if test_patch:
@@ -449,13 +485,13 @@ class SealionDataset(data.Dataset):
                 print(self.ttime.val, self.ttime.avg)
                 print(reconstruct_target.sum(), target_arr.sum())
 
-            attempts = 16
+            attempts = 2
             for i in range(attempts):
-                tw, th = self.patch_size
+                pw, ph = self.patch_size
                 cx, cy = self._random_patch_center(input_id, w, h)
                 input_patch, target_patch = self._crop_and_transform(cx, cy, input_img, target_arr, randomize=True)
                 # check centre of chosen patch_index for valid pixels
-                if np.any(utils.crop_around(input_patch, tw//2, th//2, tw//4, th//4)):
+                if np.any(utils.crop_center(input_patch, pw//2, ph//2, pw//4, ph//4)):
                     break
 
             input_tile_tensor = self.transform(input_patch)
@@ -463,7 +499,10 @@ class SealionDataset(data.Dataset):
         else:
             target_arr = None
             if self.has_targets:
-                target_arr = self._load_target(input_id)
+                if self.generate_target:
+                    target_arr = self.data_by_id[input_id]['coords']
+                else:
+                    target_arr = self._load_target(input_id)
 
             test_patch = False
             if test_patch:
