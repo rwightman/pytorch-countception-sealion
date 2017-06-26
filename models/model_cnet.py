@@ -48,13 +48,13 @@ def crop_and_concat(upsampled, bypass, crop=False):
 
 class ModelCnet(nn.Module):
 
-    def __init__(self, inplanes=3, outplanes=1):
+    def __init__(self, inplanes=3, outplanes=1, target_size=(256, 256)):
         super(ModelCnet, self).__init__()
         self.inplanes = inplanes
         self.outplanes = outplanes
         self.activation = nn.LeakyReLU(0.2)
-        self.use_bn = True
-        self.use_pad = True
+        self.use_bn = False
+        self.use_pad = False
 
         torch.LongTensor()
 
@@ -88,7 +88,8 @@ class ModelCnet(nn.Module):
         else:
             self.conv_final = nn.Sequential(
                 nn.Conv2d(64, self.outplanes, kernel_size=1, stride=1),
-                nn.UpsamplingBilinear2d(size=(284, 284)))
+                nn.ReLU(),
+                nn.UpsamplingBilinear2d(size=target_size))
 
         # Weight initialization
         for m in self.modules():

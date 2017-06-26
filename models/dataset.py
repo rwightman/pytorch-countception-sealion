@@ -197,7 +197,7 @@ class SealionDataset(data.Dataset):
         self.target_type = target_type
         self.generate_target = generate_target  # generate on the fly instead of loading
 
-        self.data_by_id = defaultdict(dict)
+        self.data_by_id = dict()
         for index, (k, v) in enumerate(zip(input_ids, input_infos)):
             if 'width' in v:
                 patch_info = self._calc_patch_info(v)
@@ -206,7 +206,7 @@ class SealionDataset(data.Dataset):
                 self.patch_count += num_patches
                 v['patches'] = patch_info
             v['index'] = index
-            self.data_by_id[k].update(v)
+            self.data_by_id[k] = v
 
         self.has_targets = False
         if os.path.exists(target_root):
@@ -238,8 +238,8 @@ class SealionDataset(data.Dataset):
             process_df['train_id'] = process_df.filename.map(lambda x: int(os.path.splitext(x)[0]))
             process_df.set_index(['train_id'], inplace=True)
             for k, v in process_df[cols].to_dict(orient='index').items():
-                d = self.data_by_id[k]
-                if d is not None:
+                if k in self.data_by_id:
+                    d = self.data_by_id[k]
                     patch_info = self._calc_patch_info(v)
                     num_patches = patch_info['num']
                     self.patch_index[d['index']] = list(range(num_patches))
@@ -321,6 +321,15 @@ class SealionDataset(data.Dataset):
         else:
             img = cv2.imread(path)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            #h, w = img.shape[:2]
+            #bh = ((h - 1) // self.patch_size[1] + 1) * self.patch_size[1] - h
+            #bw = ((w - 1) // self.patch_size[0] + 1) * self.patch_size[0] - w
+            #if bh or bw:
+            #    bwl = bw // 2
+            #    bhl = bh // 2
+            #    print("Adding border...", bh, bw)
+            #    img = cv2.copyMakeBorder(img, bhl, bh-bhl, bwl, bw-bwl, cv2.BORDER_CONSTANT, (0, 0, 0))
+            #    print('%d -> %d x %d -> %d' % (w, img.shape[1], h, img.shape[0]))
         return img
 
     @functools.lru_cache(4)
@@ -346,7 +355,7 @@ class SealionDataset(data.Dataset):
 
     def _random_patch_center(self, input_id, w, h):
         d = self.data_by_id[input_id]
-        if len(d['coords']) and random.random() < 0.4:
+        if len(d['coords']) and random.random() < 0.5:
             # 40% of the time, randomly pick a point around an actual sealion
             cx, cy, _ = d['coords'][random.randint(0, len(d['coords']) - 1)]
             cx = cx + random.randint(-self.patch_size[0] // 4, self.patch_size[0] // 4)

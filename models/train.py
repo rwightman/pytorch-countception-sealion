@@ -73,7 +73,7 @@ def main():
     loader = data.DataLoader(
         dataset,
         batch_size=batch_size, shuffle=True, num_workers=args.num_processes, sampler=sampler)
-    #model = ModelCnet(outplanes=num_outputs)
+    #model = ModelCnet(outplanes=num_outputs, target_size=patch_size)
     model = ModelCountception(outplanes=num_outputs)
     if not args.no_cuda:
         model.cuda()
@@ -82,7 +82,7 @@ def main():
         model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     #optimizer = optim.Adam(
     #    model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    loss_fn = torch.nn.L1Loss() #torch.nn.MSELoss()
+    loss_fn = torch.nn.SmoothL1Loss()
     # optionally resume from a checkpoint
 
     if args.resume:
