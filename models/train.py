@@ -121,6 +121,7 @@ def main():
         assert False and "Invalid loss function"
 
     # optionally resume from a checkpoint
+    start_epoch = 1
     if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
@@ -130,10 +131,11 @@ def main():
             optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
+            start_epoch = checkpoint['epoch']
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    for epoch in range(1, num_epochs + 1):
+    for epoch in range(start_epoch, num_epochs + 1):
         adjust_learning_rate(optimizer, epoch, initial_lr=args.lr, decay_epochs=3)
         train_epoch(epoch, model, loader, optimizer, loss_fn, args)
         save_checkpoint({

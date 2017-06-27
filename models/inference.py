@@ -33,6 +33,8 @@ parser.add_argument('-r', '--restore-checkpoint', default=None,
                     help='path to restore checkpoint, e.g. ./checkpoint-1.tar')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
+parser.add_argument('--num-gpu', type=int, default=1,
+                    help='Number of GPUS to use')
 
 COLS = ['test_id', 'adult_males', 'subadult_males', 'adult_females', 'juveniles', 'pups']
 
@@ -44,7 +46,7 @@ def main():
     processed_file = os.path.join(args.data, test_input_root, 'processed.csv')
 
     batch_size = args.batch_size
-    patch_size = [284] * 2
+    patch_size = [256] * 2
     num_outputs = 5
     overlapped_patches = False
     debug_image = False
@@ -72,7 +74,10 @@ def main():
         assert False and "Invalid model"
 
     if not args.no_cuda:
-        model.cuda()
+        if args.num_gpu > 1:
+            model = torch.nn.DataParallel(model, device_ids=list(range(args.num_gpu))).cuda()
+        else:
+            model.cuda()
 
     if args.restore_checkpoint is not None:
         assert os.path.isfile(args.restore_checkpoint), '%s not found' % args.restore_checkpoint
