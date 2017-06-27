@@ -19,6 +19,8 @@ import torch.nn.functional as F
 parser = argparse.ArgumentParser(description='PyTorch Sealion count inference')
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
+parser.add_argument('--model', default='cnet', type=str, metavar='MODEL',
+                    help='Name of model to train (default: "cnet"')
 parser.add_argument('--batch-size', type=int, default=16, metavar='N',
                     help='input batch size for training (default: 16)')
 parser.add_argument('--seed', type=int, default=1, metavar='S',
@@ -59,7 +61,14 @@ def main():
         shuffle=False,
         num_workers=args.num_processes,
         sampler=sampler)
-    model = ModelCnet(outplanes=num_outputs)
+
+    if args.model == 'cnet':
+        model = ModelCnet(outplanes=num_outputs, target_size=patch_size)
+    elif args.model == 'countception' or args.model == 'cc':
+        model = ModelCountception(outplanes=num_outputs, debug=False)
+    else:
+        assert False and "Invalid model"
+
     if not args.no_cuda:
         model.cuda()
 

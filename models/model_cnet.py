@@ -121,3 +121,6 @@ class ModelCnet(nn.Module):
         conv_final_out = self.conv_final(dec1_out)
 
         return conv_final_out
+
+    def name(self):
+        return 'cnet'

@@ -17,6 +17,12 @@ import torchvision.utils
 parser = argparse.ArgumentParser(description='PyTorch Sealion count training')
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
+parser.add_argument('--model', default='cnet', type=str, metavar='MODEL',
+                    help='Name of model to train (default: "cnet"')
+parser.add_argument('--opt', default='sgd', type=str, metavar='OPTIMIZER',
+                    help='Optimizer (default: "sgd"')
+parser.add_argument('--loss', default='l1', type=str, metavar='LOSS',
+                    help='Loss function (default: "l1"')
 parser.add_argument('--batch-size', type=int, default=16, metavar='N',
                     help='input batch size for training (default: 16)')
 parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
@@ -48,7 +54,7 @@ parser.add_argument('--save-batches', action='store_true', default=False,
 def main():
     args = parser.parse_args()
 
-    processed_base = 'Train-processed'
+    processed_base = 'Train-processed-2'
     train_input_root = os.path.join(args.data, processed_base, 'inputs')
     train_target_root = os.path.join(args.data,  processed_base, 'targets')
     train_process_file = os.path.join(args.data, processed_base, 'processed.csv')
@@ -57,8 +63,10 @@ def main():
 
     batch_size = args.batch_size
     num_epochs = 1000
-    patch_size = [256] * 2
+    patch_size = [284] * 2
     num_outputs = 5
+    target_type = 'countception' if args.model == 'countception' or args.model == 'cc' else 'density'
+
     dataset = SealionDataset(
         train_input_root,
         train_target_root,
@@ -67,16 +75,23 @@ def main():
         train_process_file,
         train=True,
         patch_size=patch_size,
-        target_type="countception",
+        target_type=target_type,
         generate_target=True,
         per_image_norm=True
     )
+
     sampler = RandomPatchSampler(dataset, oversample=32, repeat=16)
+
     loader = data.DataLoader(
         dataset,
         batch_size=batch_size, shuffle=True, num_workers=args.num_processes, sampler=sampler)
-    #model = ModelCnet(outplanes=num_outputs, target_size=patch_size)
-    model = ModelCountception(outplanes=num_outputs)
+
+    if args.model == 'cnet':
+        model = ModelCnet(outplanes=num_outputs, target_size=patch_size)
+    elif args.model == 'countception' or args.model == 'cc':
+        model = ModelCountception(outplanes=num_outputs, debug=False)
+    else:
+        assert False and "Invalid model"
 
     if not args.no_cuda:
         if args.num_gpu > 1:
@@ -84,13 +99,28 @@ def main():
         else:
             model.cuda()
 
-    optimizer = optim.SGD(
-        model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-    #optimizer = optim.Adam(
-    #    model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    loss_fn = torch.nn.SmoothL1Loss()
-    # optionally resume from a checkpoint
+    if args.opt.lower() == 'sgd':
+        optimizer = optim.SGD(
+            model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    elif args.opt.lower() == 'adam':
+        optimizer = optim.Adam(
+            model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    elif args.opt.lower() == 'adadelta':
+        optimizer = optim.Adadelta(
+            model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        assert False and "Invalid optimizer"
 
+    if args.loss.lower() == 'l1':
+        loss_fn = torch.nn.L1Loss()
+    elif args.loss.lower() == 'smoothl1':
+        loss_fn = torch.nn.SmoothL1Loss()
+    elif args.loss.lower() == 'mse':
+        loss_fn = torch.nn.MSELoss()
+    else:
+        assert False and "Invalid loss function"
+
+    # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
@@ -108,7 +138,7 @@ def main():
         train_epoch(epoch, model, loader, optimizer, loss_fn, args)
         save_checkpoint({
             'epoch': epoch + 1,
-            'arch': 'c-net',
+            'arch': model.name(),
             'state_dict':  model.state_dict(),
             'optimizer': optimizer.state_dict(),
             },

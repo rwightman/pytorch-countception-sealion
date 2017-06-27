@@ -82,3 +82,6 @@ class ModelFcrn(nn.Module):
         unconv2_out = self.unconv2(unconv1_out)  # 1
         print(unconv2_out.size())
         return unconv2_out
+
+    def name(self):
+        return 'fcrn'

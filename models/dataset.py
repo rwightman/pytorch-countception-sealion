@@ -135,7 +135,8 @@ class IndexedPatchSampler(Sampler):
                 for j in self.patch_index[i]:
                     yield ImagePatchIndex(i, j)
         else:
-            return iter(range(self.num_images))
+            for i in range(self.num_images):
+                yield i
 
     def __len__(self):
         return self.num_patches if self.num_patches else self.num_images
@@ -387,7 +388,7 @@ class SealionDataset(data.Dataset):
     def _crop_and_transform(self, cx, cy, input_img, target_arr, randomize=False):
         target_tile = None
         transform_target = False if target_arr is None else True
-        target_is_coords = True if target_arr.shape[1] == 3 else False
+        target_is_coords = True if transform_target and target_arr.shape[1] == 3 else False
 
         if randomize:
             angle = 0.
@@ -396,7 +397,7 @@ class SealionDataset(data.Dataset):
             do_rotate = random.random() < 0.25 if not hflip and not vflip else False
             if do_rotate:
                 angle = random.random() * 360
-            scale = random.uniform(0.667, 1.5)
+            scale = random.uniform(0.33, 0.75)
             #print('hflip: %d, vflip: %d, angle: %f, scale: %f' % (hflip, vflip, angle, scale))
         else:
             angle = 0.
