@@ -37,6 +37,8 @@ parser.add_argument('--num-processes', type=int, default=2, metavar='N',
                     help='how many training processes to use (default: 2)')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
+parser.add_argument('--num-gpu', type=int, default=1,
+                    help='Number of GPUS to use')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('--save-batches', action='store_true', default=False,
@@ -69,14 +71,18 @@ def main():
         generate_target=True,
         per_image_norm=True
     )
-    sampler = RandomPatchSampler(dataset, oversample=192, repeat=16)
+    sampler = RandomPatchSampler(dataset, oversample=32, repeat=16)
     loader = data.DataLoader(
         dataset,
         batch_size=batch_size, shuffle=True, num_workers=args.num_processes, sampler=sampler)
     #model = ModelCnet(outplanes=num_outputs, target_size=patch_size)
     model = ModelCountception(outplanes=num_outputs)
+
     if not args.no_cuda:
-        model.cuda()
+        if args.num_gpu > 1:
+            model = torch.nn.DataParallel(model, device_ids=list(range(args.num_gpu))).cuda()
+        else:
+            model.cuda()
 
     optimizer = optim.SGD(
         model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
