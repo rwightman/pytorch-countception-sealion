@@ -177,6 +177,7 @@ class SealionDataset(data.Dataset):
             train=True,
             patch_size=[256, 256],
             patch_stride=128,
+            prescale=0.0,
             generate_target=True,
             target_type='density',
             per_image_norm=False,
@@ -194,6 +195,7 @@ class SealionDataset(data.Dataset):
         self.patch_count = 0
         self.patch_size = patch_size
         self.patch_stride = patch_stride
+        self.prescale = prescale if prescale != 1.0 else 0.0
         assert target_type in TARGET_TYPES
         self.target_type = target_type
         self.generate_target = generate_target  # generate on the fly instead of loading
@@ -201,6 +203,8 @@ class SealionDataset(data.Dataset):
         self.data_by_id = dict()
         for index, (k, v) in enumerate(zip(input_ids, input_infos)):
             if 'width' in v:
+                if self.prescale:
+                    v = self._apply_prescale(v, self.prescale)
                 patch_info = self._calc_patch_info(v)
                 num_patches = patch_info['num']
                 self.patch_index[index] = list(range(num_patches))
@@ -241,6 +245,8 @@ class SealionDataset(data.Dataset):
             for k, v in process_df[cols].to_dict(orient='index').items():
                 if k in self.data_by_id:
                     d = self.data_by_id[k]
+                    if self.prescale:
+                        v = self._apply_prescale(v, self.prescale)
                     patch_info = self._calc_patch_info(v)
                     num_patches = patch_info['num']
                     self.patch_index[d['index']] = list(range(num_patches))
@@ -262,6 +268,8 @@ class SealionDataset(data.Dataset):
                 fid = int(os.path.splitext(file)[0])
                 if fid in self.data_by_id:
                     d = self.data_by_id[fid]
+                    if self.prescale:
+                        coords[:, :2] = np.rint(coords[:, :2] * self.prescale)
                     xy_offset = np.array([d['xmin'], d['ymin']])
                     coords[:, :2] = coords[:, :2] + xy_offset
                     d['coords'] = coords
@@ -280,6 +288,11 @@ class SealionDataset(data.Dataset):
             self.transform = transforms.Compose(tfs)
         self.target_transform = target_transform
         self.ttime = utils.AverageMeter()
+
+    def _apply_prescale(self, input_info, scale):
+        for k in ['xmin', 'xmax', 'ymin', 'ymax', 'width', 'height']:
+            input_info[k] = np.rint(input_info[k] * scale).astype(np.int)
+        return input_info
 
     def _calc_patch_info(self, input_info):
         x_min = input_info['xmin']
@@ -317,20 +330,20 @@ class SealionDataset(data.Dataset):
     def _load_input(self, input_id):
         path = self.data_by_id[input_id]['filename']
         print("Loading %s" % path)
-        if os.path.splitext(path)[1] == '.npy':
-            img = np.load(path)
-        else:
-            img = cv2.imread(path)
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            #h, w = img.shape[:2]
-            #bh = ((h - 1) // self.patch_size[1] + 1) * self.patch_size[1] - h
-            #bw = ((w - 1) // self.patch_size[0] + 1) * self.patch_size[0] - w
-            #if bh or bw:
-            #    bwl = bw // 2
-            #    bhl = bh // 2
-            #    print("Adding border...", bh, bw)
-            #    img = cv2.copyMakeBorder(img, bhl, bh-bhl, bwl, bw-bwl, cv2.BORDER_CONSTANT, (0, 0, 0))
-            #    print('%d -> %d x %d -> %d' % (w, img.shape[1], h, img.shape[0]))
+        img = cv2.imread(path)
+        if self.prescale:
+            dsize = (self.data_by_id[input_id]['width'], self.data_by_id[input_id]['height'])
+            img = cv2.resize(img, dsize)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        #h, w = img.shape[:2]
+        #bh = ((h - 1) // self.patch_size[1] + 1) * self.patch_size[1] - h
+        #bw = ((w - 1) // self.patch_size[0] + 1) * self.patch_size[0] - w
+        #if bh or bw:
+        #    bwl = bw // 2
+        #    bhl = bh // 2
+        #    print("Adding border...", bh, bw)
+        #    img = cv2.copyMakeBorder(img, bhl, bh-bhl, bwl, bw-bwl, cv2.BORDER_CONSTANT, (0, 0, 0))
+        #    print('%d -> %d x %d -> %d' % (w, img.shape[1], h, img.shape[0]))
         return img
 
     @functools.lru_cache(4)

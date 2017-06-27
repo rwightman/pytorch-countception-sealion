@@ -29,7 +29,7 @@ parser.add_argument('--log-interval', type=int, default=100, metavar='N',
                     help='how many batches to wait before logging training status')
 parser.add_argument('--num-processes', type=int, default=2, metavar='N',
                     help='how many training processes to use (default: 2)')
-parser.add_argument('-r', '--restore_checkpoint', default=None,
+parser.add_argument('-r', '--restore-checkpoint', default=None,
                     help='path to restore checkpoint, e.g. ./checkpoint-1.tar')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
@@ -44,15 +44,17 @@ def main():
     processed_file = os.path.join(args.data, test_input_root, 'processed.csv')
 
     batch_size = args.batch_size
-    patch_size = [384] * 2
+    patch_size = [284] * 2
     num_outputs = 5
     overlapped_patches = False
+    debug_image = False
     dataset = SealionDataset(
         test_input_root,
         processing_file=processed_file,
         train=False,
         patch_size=patch_size,
         patch_stride=patch_size[0] // 2 if overlapped_patches else patch_size[0],
+        prescale=0.5,
         per_image_norm=True)
     sampler = IndexedPatchSampler(dataset)
     loader = data.DataLoader(
@@ -115,13 +117,12 @@ def main():
                         cols = dataset.get_patch_cols(current_id)
                         output_arr = np.zeros((h, w, num_outputs), dtype=np.float32)
                         patches_arr = np.stack(patches)
+                        # FIXME there are some bounds issues that need to be sorted with merge fn and certain image
+                        # w/h and patch/stride alignments
                         merge_patches_float32(output_arr, patches_arr, cols, dataset.patch_size, dataset.patch_stride)
                         counts = list(np.sum(output_arr, axis=(0, 1)))
-                        debug_image = False
                         if debug_image:
-                            debug_img = cv2.normalize(
-                                output_arr[:, :, :3], None, 0, 255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8UC3)
-                            cv2.imwrite('output-%d.png' % current_id, debug_img)
+                            write_debug_img(output_arr, current_id)
                     else:
                         #print(len(patches))
                         counts = list(np.sum(patches, axis=0))
@@ -152,6 +153,17 @@ def main():
         pass
     results_df = pd.DataFrame(results, columns=COLS)
     results_df.to_csv('submission.csv', index=False)
+
+
+def write_debug_img(img, current_id):
+    dimg = img.astype(np.float64)
+    dimg = (dimg[:, :, 0] + 2 ** 8 * dimg[:, :, 1] + 2 ** 16 * dimg[:, :, 2]
+            + 2 ** 24 * dimg[:, :, 3] + 2 ** 32 * dimg[:, :, 4])
+    dimg = cv2.normalize(
+        dimg, None, 0, 255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8UC1)
+    dimg = cv2.applyColorMap(dimg, colormap=cv2.COLORMAP_JET)
+    cv2.imwrite('output-%d.png' % current_id, dimg)
+
 
 if __name__ == '__main__':
     main()
