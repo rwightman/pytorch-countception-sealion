@@ -1,7 +1,7 @@
 # Pytorch Counting Models for Kaggle Sea Lion Count Challenge
 
 ## Overview
-With less than two weeks remaining, I decided to jump into the Kaggle Sea Lion count competitiong (https://www.kaggle.com/c/noaa-fisheries-steller-sea-lion-population-count) and see if I could get results implementing a few CNN based counting models I'd been reading about. 
+With less than two weeks remaining, I decided to jump into the Kaggle Sea Lion count competition (https://www.kaggle.com/c/noaa-fisheries-steller-sea-lion-population-count) and see if I could get results implementing a few CNN based counting models I'd been reading about. 
 
 Basically an excuse to try Pytorch and  experiment with some new models. Most of my other NN hacking has been in Tensorflow, Torch, or Theano.  
 
