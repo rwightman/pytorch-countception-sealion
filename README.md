@@ -1,4 +1,4 @@
-# Pytorch Counting Models for Kaggle Sealion Count Challenge
+# Pytorch Counting Models for Kaggle Sea Lion Count Challenge
 
 ## Overview
 With less than two weeks remaining, I decided to jump into the Kaggle Sea Lion count competitiong (https://www.kaggle.com/c/noaa-fisheries-steller-sea-lion-population-count) and see if I could get results implementing a few CNN based counting models I'd been reading about. 
@@ -21,7 +21,7 @@ What's working:
 * Inference (submission generation)
 
 What's not:
-* Good results. Both models train but the appropriate features for Sealion counting and category discrimination do not appear to be learned. Counts are way off. Doing regression across multiple categories of similar looking objects is likely making this a very challenging objective.
+* Good results. Both models train but the appropriate features for sea lion counting and category discrimination do not appear to be learned. Counts are way off. Doing regression across multiple categories of similar looking objects is likely making this a very challenging objective.
 * Validation
 
 
