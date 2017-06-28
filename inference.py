@@ -1,26 +1,23 @@
 import argparse
 import os
 import time
-import shutil
 import cv2
 import numpy as np
 import pandas as pd
-from collections import defaultdict
 from dataset import SealionDataset, IndexedPatchSampler
-from model_cnet import ModelCnet
-from model_countception import ModelCountception
+from models import ModelCnet, ModelCountception
 from utils import AverageMeter
-from utils_cython  import merge_patches_float32
+from utils_cython import merge_patches_float32
 import torch
 import torch.autograd as autograd
 import torch.utils.data as data
-import torch.nn.functional as F
+
 
 parser = argparse.ArgumentParser(description='PyTorch Sealion count inference')
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
-parser.add_argument('--model', default='cnet', type=str, metavar='MODEL',
-                    help='Name of model to train (default: "cnet"')
+parser.add_argument('--model', default='countception', type=str, metavar='MODEL',
+                    help='Name of model to train (default: "countception"')
 parser.add_argument('--batch-size', type=int, default=16, metavar='N',
                     help='input batch size for training (default: 16)')
 parser.add_argument('--seed', type=int, default=1, metavar='S',
@@ -42,16 +39,16 @@ COLS = ['test_id', 'adult_males', 'subadult_males', 'adult_females', 'juveniles'
 def main():
     args = parser.parse_args()
 
-    test_input_root = os.path.join(args.data, 'Test')
-    processed_file = os.path.join(args.data, test_input_root, 'processed.csv')
+    processed_file = os.path.join(args.data, 'processed.csv')
 
     batch_size = args.batch_size
     patch_size = [256] * 2
     num_outputs = 5
     overlapped_patches = False
     debug_image = False
+    debug_model = False
     dataset = SealionDataset(
-        test_input_root,
+        args.data,
         processing_file=processed_file,
         train=False,
         patch_size=patch_size,
@@ -67,9 +64,9 @@ def main():
         sampler=sampler)
 
     if args.model == 'cnet':
-        model = ModelCnet(outplanes=num_outputs, target_size=patch_size)
+        model = ModelCnet(outplanes=num_outputs, target_size=patch_size, debug=debug_model)
     elif args.model == 'countception' or args.model == 'cc':
-        model = ModelCountception(outplanes=num_outputs, debug=False)
+        model = ModelCountception(outplanes=num_outputs, debug=debug_model)
     else:
         assert False and "Invalid model"
 
@@ -89,8 +86,6 @@ def main():
 
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
-    model_time_m = AverageMeter()
-    post_time_m = AverageMeter()
     current_id = -1
     patches = []
     results = []
@@ -122,7 +117,7 @@ def main():
                         cols = dataset.get_patch_cols(current_id)
                         output_arr = np.zeros((h, w, num_outputs), dtype=np.float32)
                         patches_arr = np.stack(patches)
-                        # FIXME there are some bounds issues that need to be sorted with merge fn and certain image
+                        # FIXME there are some bounds issues that need to be debuged with merge and certain image
                         # w/h and patch/stride alignments
                         merge_patches_float32(output_arr, patches_arr, cols, dataset.patch_size, dataset.patch_stride)
                         counts = list(np.sum(output_arr, axis=(0, 1)))
@@ -162,8 +157,8 @@ def main():
 
 def write_debug_img(img, current_id):
     dimg = img.astype(np.float64)
-    dimg = (dimg[:, :, 0] + 2 ** 8 * dimg[:, :, 1] + 2 ** 16 * dimg[:, :, 2]
-            + 2 ** 24 * dimg[:, :, 3] + 2 ** 32 * dimg[:, :, 4])
+    dimg = (dimg[:, :, 0] + 2**8 * dimg[:, :, 1] + 2**16 * dimg[:, :, 2]
+            + 2**24 * dimg[:, :, 3] + 2**32 * dimg[:, :, 4])
     dimg = cv2.normalize(
         dimg, None, 0, 255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8UC1)
     dimg = cv2.applyColorMap(dimg, colormap=cv2.COLORMAP_JET)

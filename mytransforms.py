@@ -1,11 +1,12 @@
+""" A few fb.resnet.torch like tranforms
+Most taken from https://github.com/pytorch/vision/pull/27
+"""
 import torch
 import random
 import cv2
 import numpy as np
 
-''' A few fb.resnet.torch like tranforms 
-    Taken from https://github.com/pytorch/vision/pull/27
-'''
+
 
 
 class Grayscale(object):

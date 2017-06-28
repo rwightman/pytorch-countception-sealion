@@ -1,8 +1,16 @@
+""" Cython patch merge
+Some code I hacked together to (more quickly) merge overlapping patches
+into an image.
+
+Goal is to reverse sklearn.feature_extraction.image.extract_patches
+
+Works for the most part but has some issues for certain image size vs patch/stride
+sizes. Need to spend more time verifying correctness of bounds.
+"""
 import numpy as np
 cimport numpy as cnp
 import cython
 from libc.string cimport memset
-from libc.math cimport pow, abs
 from cpython cimport array
 import array
 import numbers

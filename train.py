@@ -2,23 +2,22 @@ import argparse
 import os
 import time
 import shutil
+from datetime import datetime
 from dataset import SealionDataset, RandomPatchSampler
-from model_cnet import ModelCnet
-from model_countception import ModelCountception
-from utils import AverageMeter
+from models import ModelCnet, ModelCountception
+from utils import AverageMeter, get_outdir
 
 import torch
 import torch.autograd as autograd
 import torch.utils.data as data
 import torch.optim as optim
-import torch.nn.functional as F
 import torchvision.utils
 
 parser = argparse.ArgumentParser(description='PyTorch Sealion count training')
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
-parser.add_argument('--model', default='cnet', type=str, metavar='MODEL',
-                    help='Name of model to train (default: "cnet"')
+parser.add_argument('--model', default='countception', type=str, metavar='MODEL',
+                    help='Name of model to train (default: "countception"')
 parser.add_argument('--opt', default='sgd', type=str, metavar='OPTIMIZER',
                     help='Optimizer (default: "sgd"')
 parser.add_argument('--loss', default='l1', type=str, metavar='LOSS',
@@ -54,18 +53,21 @@ parser.add_argument('--save-batches', action='store_true', default=False,
 def main():
     args = parser.parse_args()
 
-    processed_base = 'Train-processed-2'
-    train_input_root = os.path.join(args.data, processed_base, 'inputs')
-    train_target_root = os.path.join(args.data,  processed_base, 'targets')
-    train_process_file = os.path.join(args.data, processed_base, 'processed.csv')
-    train_counts_file = os.path.join(args.data, 'Train/train.csv')
-    train_coords_file = os.path.join(args.data, 'Train/correct_coords.csv')
+    train_input_root = os.path.join(args.data, 'inputs')
+    train_target_root = os.path.join(args.data, 'targets')
+    train_process_file = os.path.join(args.data, 'processed.csv')
+    train_counts_file = './data/correct_train.csv'
+    train_coords_file = './data/correct_coordinates.csv'
+    output_dir = get_outdir('./output', 'train', datetime.now().strftime("%Y%m%d-%H%M%S"))
 
     batch_size = args.batch_size
     num_epochs = 1000
-    patch_size = [284] * 2
+    patch_size = [256] * 2
     num_outputs = 5
     target_type = 'countception' if args.model == 'countception' or args.model == 'cc' else 'density'
+    debug_model = False
+
+    torch.manual_seed(args.seed)
 
     dataset = SealionDataset(
         train_input_root,
@@ -87,9 +89,9 @@ def main():
         batch_size=batch_size, shuffle=True, num_workers=args.num_processes, sampler=sampler)
 
     if args.model == 'cnet':
-        model = ModelCnet(outplanes=num_outputs, target_size=patch_size)
+        model = ModelCnet(outplanes=num_outputs, target_size=patch_size, debug=debug_model)
     elif args.model == 'countception' or args.model == 'cc':
-        model = ModelCountception(outplanes=num_outputs, debug=False)
+        model = ModelCountception(outplanes=num_outputs, debug=debug_model)
     else:
         assert False and "Invalid model"
 
@@ -137,7 +139,7 @@ def main():
 
     for epoch in range(start_epoch, num_epochs + 1):
         adjust_learning_rate(optimizer, epoch, initial_lr=args.lr, decay_epochs=3)
-        train_epoch(epoch, model, loader, optimizer, loss_fn, args)
+        train_epoch(epoch, model, loader, optimizer, loss_fn, args, output_dir)
         save_checkpoint({
             'epoch': epoch + 1,
             'arch': model.name(),
@@ -145,10 +147,11 @@ def main():
             'optimizer': optimizer.state_dict(),
             },
             is_best=False,
-            filename='checkpoint-%d.pth.tar' % epoch)
+            filename='checkpoint-%d.pth.tar' % epoch,
+            output_dir=output_dir)
 
 
-def train_epoch(epoch, model, loader, optimizer, loss_fn, args):
+def train_epoch(epoch, model, loader, optimizer, loss_fn, args, output_dir):
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     losses_m = AverageMeter()
@@ -188,8 +191,14 @@ def train_epoch(epoch, model, loader, optimizer, loss_fn, args):
                 data_time=data_time_m))
 
             if args.save_batches:
-                torchvision.utils.save_image(input, 'input-batch-%d.jpg' % batch_idx, normalize=True)
-                torchvision.utils.save_image(torch.sum(target, dim=1), 'target-batch-%d.jpg' % batch_idx, normalize=True)
+                torchvision.utils.save_image(
+                    input,
+                    os.path.join(output_dir, 'input-batch-%d.jpg' % batch_idx),
+                    normalize=True)
+                torchvision.utils.save_image(
+                    torch.sum(target, dim=1),
+                    os.path.join(output_dir, 'target-batch-%d.jpg' % batch_idx),
+                    normalize=True)
         end = time.time()
 
 
@@ -200,10 +209,11 @@ def adjust_learning_rate(optimizer, epoch, initial_lr, decay_epochs=5):
         param_group['lr'] = lr
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
-    torch.save(state, filename)
+def save_checkpoint(state, is_best, filename='checkpoint.pth.tar', output_dir=''):
+    save_path = os.path.join(output_dir, filename)
+    torch.save(state, save_path)
     if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
+        shutil.copyfile(save_path, os.path.join(output_dir, 'model_best.pth.tar'))
 
 
 if __name__ == '__main__':

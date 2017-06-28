@@ -1,6 +1,7 @@
 import numbers
 import math
 import numpy as np
+import os
 from sklearn.feature_extraction.image import extract_patches
 from contextlib import contextmanager
 
@@ -159,3 +160,10 @@ def patch_view(input_img, patch_size, stride, flatten=True):
         # Note, this causes data in view to be copied to a new array
         patches = patches.reshape([-1] + list(patch_shape))
     return patches, patch_rowcol
+
+
+def get_outdir(path, *paths):
+    outdir = os.path.join(path, *paths)
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+    return outdir

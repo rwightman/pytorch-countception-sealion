@@ -1,3 +1,10 @@
+""" Kaggle Sealion Pytorch Dataset
+Pytorch Dataset code for patched based training and prediction of the
+NOAA Fishes Sea Lion counting Kaggle data.
+
+Dataset code generates or loads targets for density and counception
+based counting models.
+"""
 from collections import defaultdict, OrderedDict
 import cv2
 import torch
@@ -115,7 +122,7 @@ class ImagePatchIndex:
 
 
 class IndexedPatchSampler(Sampler):
-    """Samples patches across images sequentially by index, always in the same order.
+    """Samples patches across images sequentially by index in raster order.
     """
 
     def __init__(self, data_source):
@@ -473,6 +480,7 @@ class SealionDataset(data.Dataset):
                 target_tile = gen_target_countception(target_points, self.patch_size)
             else:
                 target_tile = gen_target_gauss(target_points, self.patch_size)
+
         return input_tile, target_tile
 
     def __getitem__(self, index):
@@ -493,21 +501,6 @@ class SealionDataset(data.Dataset):
                 target_arr = self._load_target(input_id)
             #print(target_arr.shape)
 
-            test_patch = False
-            if test_patch:
-                print(w, h)
-                num_patch = utils.calc_num_patches(w, h, self.patch_size, self.patch_stride)
-                view, view_rc = utils.patch_view(target_arr, self.patch_size, self.patch_stride)
-                assert num_patch[0] == view.shape[0] and num_patch[1] == view_rc[1] and num_patch[2] == view_rc[0]
-                print('view', view.shape, view_rc, num_patch)
-                reconstruct_target = np.zeros(target_arr.shape, dtype=target_arr.dtype)
-                start = time.time()
-                utils_cython.merge_patches_float32(
-                    reconstruct_target, view, view_rc[1], self.patch_size, self.patch_stride)
-                self.ttime.update(time.time() - start)
-                print(self.ttime.val, self.ttime.avg)
-                print(reconstruct_target.sum(), target_arr.sum())
-
             attempts = 2
             for i in range(attempts):
                 pw, ph = self.patch_size
@@ -526,30 +519,6 @@ class SealionDataset(data.Dataset):
                     target_arr = self.data_by_id[input_id]['coords']
                 else:
                     target_arr = self._load_target(input_id)
-
-            test_patch = False
-            if test_patch:
-                def view_tensor(arr):
-                    assert (isinstance(arr, np.ndarray))
-                    t = torch.from_numpy(arr.transpose((0, 3, 1, 2)))
-                    # print(t.size())
-                    if isinstance(t, torch.ByteTensor):
-                        return t.float().div(255)
-                    return t
-
-                view, view_rc = utils.patch_view(input_img, self.patch_size, self.patch_stride)
-                print('view', view.shape, view_rc)
-                viewt = view_tensor(view)
-                tvutils.save_image(viewt, 'view-%d.jpg' % index, nrow=view_rc[1], normalize=True)
-
-                reconstruct_img = np.zeros((h, w, 3), dtype=np.uint8)
-                start = time.time()
-                utils_cython.merge_patches_uint8(reconstruct_img, view, view_rc[1], self.patch_size, self.patch_stride)
-                self.ttime.update(time.time() - start)
-                print(self.ttime.val, self.ttime.avg)
-
-                reconstruct_img = cv2.cvtColor(reconstruct_img, cv2.COLOR_RGB2BGR)
-                cv2.imwrite('borg-%d.jpg' % index, reconstruct_img)
 
             cx, cy = self._indexed_patch_center(input_id, patch_index)
             input_patch, target_patch = self._crop_and_transform(cx, cy, input_img, target_arr, randomize=False)

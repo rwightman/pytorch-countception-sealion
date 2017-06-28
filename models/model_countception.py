@@ -1,14 +1,11 @@
+""" Counception Model
+A Pytorch implementation of Count-ception
+
+Inspired by: https://arxiv.org/abs/1703.08710
+"""
 import torch
 import torch.nn as nn
 import torch.nn.init as init
-import math
-
-
-def conv_block(in_chan, out_chan, ksize=3, stride=1, pad=0, activation=nn.LeakyReLU()):
-    return nn.Sequential(
-        nn.Conv2d(in_chan, out_chan, kernel_size=ksize, stride=stride, padding=pad),
-        activation,
-        nn.BatchNorm2d(out_chan))
 
 
 class ConvBlock(nn.Module):
@@ -51,7 +48,7 @@ class ModelCountception(nn.Module):
         self.conv1 = ConvBlock(self.inplanes, 64, ksize=3, pad=self.patch_size, activation=self.activation)
         self.simple1 = SimpleBlock(64, 16, 16, activation=self.activation)
         self.simple2 = SimpleBlock(32, 16, 32, activation=self.activation)
-        self.conv2 = conv_block(48, 16, ksize=14, activation=self.activation)
+        self.conv2 = ConvBlock(48, 16, ksize=14, activation=self.activation)
         self.simple3 = SimpleBlock(16, 112, 48, activation=self.activation)
         self.simple4 = SimpleBlock(160, 64, 32, activation=self.activation)
         self.simple5 = SimpleBlock(96, 40, 40, activation=self.activation)
@@ -65,8 +62,6 @@ class ModelCountception(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
                 init.xavier_uniform(m.weight, gain=init.calculate_gain('leaky_relu', param=0.01))
-                #n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                #m.weight.data.normal_(0, math.sqrt(2. / n))
             elif isinstance(m, nn.BatchNorm2d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
