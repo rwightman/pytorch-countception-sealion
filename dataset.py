@@ -21,7 +21,6 @@ import functools
 import time
 import mytransforms
 import utils
-import utils_cython
 
 IMG_EXTENSIONS = ['.jpg', '.jpeg', '.png']
 CATEGORIES = ["adult_males", "subadult_males", "adult_females", "juveniles", "pups"]

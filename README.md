@@ -36,4 +36,7 @@ Inference:
     python inference.py /data/x/sealion/Test/ --batch-size 8 --num-processes 4 --restore-checkpoint output/train/20170625-200215/checkpoint-1.pth.tar
 
  
+Build 'utils_cython' module for overlapping patch merge:
  
+     setup.py build_ext --inplace
+   
