@@ -71,7 +71,7 @@ def main():
     target_type = 'countception' if args.model in ['countception', 'cc'] else 'density'
     debug_model = False
     use_logits = args.use_logits
-    num_logits = 12
+    num_logits = 12 if use_logits else 0
 
     torch.manual_seed(args.seed)
 
@@ -85,7 +85,8 @@ def main():
         patch_size=patch_size,
         target_type=target_type,
         generate_target=True,
-        per_image_norm=True
+        per_image_norm=True,
+        num_logits=num_logits,
     )
 
     sampler = RandomPatchSampler(dataset, oversample=32, repeat=16)
