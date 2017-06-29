@@ -5,14 +5,13 @@ NOAA Fishes Sea Lion counting Kaggle data.
 Dataset code generates or loads targets for density and counception
 based counting models.
 """
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
 import cv2
 import torch
 import torch.utils.data as data
 from torch.utils.data.sampler import Sampler
 from torchvision import datasets, transforms
 from PIL import Image
-import torchvision.utils as tvutils
 import random
 import pandas as pd
 import numpy as np
@@ -88,7 +87,7 @@ def gen_target_gauss(coords, size, sigma=5, kernel_size=(21, 21), factor=1024.):
     return target_img
 
 
-def gen_target_countception(coords, size, subpatch_size=32, stride=1):
+def gen_target_countception(coords, size, subpatch_size=32, stride=1, max_count=0, dtype=np.float32):
     w, h = size
     pad = (subpatch_size - 1) // 2
     w = (w + 2 * pad) // stride
@@ -97,12 +96,15 @@ def gen_target_countception(coords, size, subpatch_size=32, stride=1):
     num_outputs = len(CATEGORIES)
     coords_pad = coords.copy()
     coords_pad[:, :2] = coords[:, :2] + [subpatch_size, subpatch_size]
-    target_img = np.zeros(shape=(h, w, num_outputs), dtype=np.float32)
+    target_img = np.zeros(shape=(h, w, num_outputs), dtype=dtype)
     for x in range(w):
         for y in range(h):
             subpatch_points = utils.crop_points(coords, x * stride, y * stride, subpatch_size, subpatch_size)
             for p in subpatch_points:
-                target_img[y][x][p[2]] += 1.
+                target_img[y][x][p[2]] += dtype(1)
+    #print(target_img.sum(axis=(0, 1))/(subpatch_size**2), target_img.max())
+    if max_count > 0:
+        target_img = np.clip(target_img, 0, max_count)
     return target_img
 
 
@@ -181,12 +183,13 @@ class SealionDataset(data.Dataset):
             coords_file='',
             processing_file='',
             train=True,
-            patch_size=[256, 256],
+            patch_size=(256, 256),
             patch_stride=128,
             prescale=0.0,
             generate_target=True,
             target_type='density',
             per_image_norm=False,
+            num_logits=0,
             transform=None,
             target_transform=None):
 
@@ -204,6 +207,9 @@ class SealionDataset(data.Dataset):
         self.prescale = prescale if prescale != 1.0 else 0.0
         assert target_type in TARGET_TYPES
         self.target_type = target_type
+        self.num_logits = num_logits
+        if num_logits:
+            assert target_type == 'countception'
         self.generate_target = generate_target  # generate on the fly instead of loading
 
         self.data_by_id = dict()
@@ -376,7 +382,7 @@ class SealionDataset(data.Dataset):
     def _random_patch_center(self, input_id, w, h):
         d = self.data_by_id[input_id]
         if len(d['coords']) and random.random() < 0.5:
-            # 40% of the time, randomly pick a point around an actual sealion
+            # 50% of the time, randomly pick a point around an actual sealion
             cx, cy, _ = d['coords'][random.randint(0, len(d['coords']) - 1)]
             cx = cx + random.randint(-self.patch_size[0] // 4, self.patch_size[0] // 4)
             cy = cy + random.randint(-self.patch_size[1] // 4, self.patch_size[1] // 4)
@@ -416,7 +422,7 @@ class SealionDataset(data.Dataset):
             do_rotate = random.random() < 0.25 if not hflip and not vflip else False
             if do_rotate:
                 angle = random.random() * 360
-            scale = random.uniform(0.33, 0.75)
+            scale = random.uniform(0.5, 1.125)
             #print('hflip: %d, vflip: %d, angle: %f, scale: %f' % (hflip, vflip, angle, scale))
         else:
             angle = 0.
@@ -476,9 +482,11 @@ class SealionDataset(data.Dataset):
             target_points = utils.crop_points(target_points, 0, 0, self.patch_size[0], self.patch_size[1])
             #print(target_points)
             if self.target_type == 'countception':
-                target_tile = gen_target_countception(target_points, self.patch_size)
+                dtype = np.uint8 if self.num_logits else np.float32
+                target_tile = gen_target_countception(
+                    target_points, self.patch_size, max_count=self.num_logits, dtype=dtype)
             else:
-                target_tile = gen_target_gauss(target_points, self.patch_size)
+                target_tile = gen_target_gauss(target_points, self.patch_size, factor=1024.)
 
         return input_tile, target_tile
 

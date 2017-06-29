@@ -22,6 +22,10 @@ parser.add_argument('--opt', default='sgd', type=str, metavar='OPTIMIZER',
                     help='Optimizer (default: "sgd"')
 parser.add_argument('--loss', default='l1', type=str, metavar='LOSS',
                     help='Loss function (default: "l1"')
+parser.add_argument('--use-logits', action='store_true', default=False,
+                    help='Enable use of logits for model output')
+parser.add_argument('--patch-size', type=int, default=256, metavar='N',
+                    help='Image patch size (default: 256)')
 parser.add_argument('--batch-size', type=int, default=16, metavar='N',
                     help='input batch size for training (default: 16)')
 parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
@@ -38,8 +42,8 @@ parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
 parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                     help='how many batches to wait before logging training status')
-parser.add_argument('--num-processes', type=int, default=2, metavar='N',
-                    help='how many training processes to use (default: 2)')
+parser.add_argument('--num-processes', type=int, default=1, metavar='N',
+                    help='how many training processes to use (default: 1)')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
 parser.add_argument('--num-gpu', type=int, default=1,
@@ -62,10 +66,12 @@ def main():
 
     batch_size = args.batch_size
     num_epochs = 1000
-    patch_size = [256] * 2
+    patch_size = (args.patch_size, args.patch_size)
     num_outputs = 5
-    target_type = 'countception' if args.model == 'countception' or args.model == 'cc' else 'density'
+    target_type = 'countception' if args.model in ['countception', 'cc'] else 'density'
     debug_model = False
+    use_logits = args.use_logits
+    num_logits = 12
 
     torch.manual_seed(args.seed)
 
@@ -89,9 +95,16 @@ def main():
         batch_size=batch_size, shuffle=True, num_workers=args.num_processes, sampler=sampler)
 
     if args.model == 'cnet':
-        model = ModelCnet(outplanes=num_outputs, target_size=patch_size, debug=debug_model)
-    elif args.model == 'countception' or args.model == 'cc':
-        model = ModelCountception(outplanes=num_outputs, debug=debug_model)
+        model = ModelCnet(
+            outplanes=num_outputs,
+            target_size=patch_size,
+            debug=debug_model)
+    elif args.model in ['countception', 'cc']:
+        model = ModelCountception(
+            outplanes=num_outputs,
+            use_logits=use_logits,
+            logits_per_output=num_logits,
+            debug=debug_model)
     else:
         assert False and "Invalid model"
 
@@ -119,6 +132,9 @@ def main():
         loss_fn = torch.nn.SmoothL1Loss()
     elif args.loss.lower() == 'mse':
         loss_fn = torch.nn.MSELoss()
+    elif args.loss.lower() in ['crossentropy', 'nll']:
+        loss_fn = torch.nn.CrossEntropyLoss()
+        assert use_logits and "Cross entropy only a valid loss of logits are being used"
     else:
         assert False and "Invalid loss function"
 
@@ -139,7 +155,7 @@ def main():
 
     for epoch in range(start_epoch, num_epochs + 1):
         adjust_learning_rate(optimizer, epoch, initial_lr=args.lr, decay_epochs=3)
-        train_epoch(epoch, model, loader, optimizer, loss_fn, args, output_dir)
+        train_epoch(epoch, model, loader, optimizer, loss_fn, args, output_dir, use_logits=use_logits)
         save_checkpoint({
             'epoch': epoch + 1,
             'arch': model.name(),
@@ -151,7 +167,7 @@ def main():
             output_dir=output_dir)
 
 
-def train_epoch(epoch, model, loader, optimizer, loss_fn, args, output_dir):
+def train_epoch(epoch, model, loader, optimizer, loss_fn, args, output_dir='', use_logits=False):
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     losses_m = AverageMeter()
@@ -167,7 +183,11 @@ def train_epoch(epoch, model, loader, optimizer, loss_fn, args, output_dir):
             input_var, target_var = autograd.Variable(input.cuda()), autograd.Variable(target.cuda())
 
         output = model(input_var)
-        loss = loss_fn(output, target_var)
+        if use_logits:
+            target_var = target_var.permute(1, 0, 2, 3).round().long()
+            loss = sum([loss_fn(x, t) for x, t in zip(output, target_var)])
+        else:
+            loss = loss_fn(output, target_var)
         losses_m.update(loss.data[0], input_var.size(0))
 
         optimizer.zero_grad()

@@ -33,7 +33,7 @@ class SimpleBlock(nn.Module):
 
 
 class ModelCountception(nn.Module):
-    def __init__(self, inplanes=3, outplanes=1, debug=False):
+    def __init__(self, inplanes=3, outplanes=1, use_logits=False, logits_per_output=12, debug=False):
         super(ModelCountception, self).__init__()
         # params
         self.inplanes = inplanes
@@ -41,6 +41,8 @@ class ModelCountception(nn.Module):
         self.activation = nn.LeakyReLU(0.01)
         self.final_activation = nn.LeakyReLU(0.01)
         self.patch_size = 32
+        self.use_logits = use_logits
+        self.logits_per_output = logits_per_output
         self.debug = debug
 
         torch.LongTensor()
@@ -56,7 +58,11 @@ class ModelCountception(nn.Module):
         self.conv3 = ConvBlock(128, 32, ksize=20, activation=self.activation)
         self.conv4 = ConvBlock(32, 64, ksize=1, activation=self.activation)
         self.conv5 = ConvBlock(64, 64, ksize=1, activation=self.activation)
-        self.conv6 = ConvBlock(64, self.outplanes, ksize=1, activation=self.final_activation)
+        if use_logits:
+            self.conv6 = nn.ModuleList([ConvBlock(
+                64, logits_per_output, ksize=1, activation=self.final_activation) for _ in range(outplanes)])
+        else:
+            self.conv6 = ConvBlock(64, self.outplanes, ksize=1, activation=self.final_activation)
 
         # Weight initialization
         for m in self.modules():
@@ -93,8 +99,12 @@ class ModelCountception(nn.Module):
         self._print(net)
         net = self.conv5(net)
         self._print(net)
-        net = self.conv6(net)
-        self._print(net)
+        if self.use_logits:
+            net = [c(net) for c in self.conv6]
+            [self._print(n) for n in net]
+        else:
+            net = self.conv6(net)
+            self._print(net)
         return net
 
     def name(self):

@@ -18,6 +18,10 @@ parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
 parser.add_argument('--model', default='countception', type=str, metavar='MODEL',
                     help='Name of model to train (default: "countception"')
+parser.add_argument('--use-logits', action='store_true', default=False,
+                    help='Enable use of logits for model output')
+parser.add_argument('--patch-size', type=int, default=256, metavar='N',
+                    help='Image patch size (default: 256)')
 parser.add_argument('--batch-size', type=int, default=16, metavar='N',
                     help='input batch size for training (default: 16)')
 parser.add_argument('--seed', type=int, default=1, metavar='S',
@@ -42,11 +46,14 @@ def main():
     processed_file = os.path.join(args.data, 'processed.csv')
 
     batch_size = args.batch_size
-    patch_size = [256] * 2
+    patch_size = (args.patch_size, args.patch_size)
     num_outputs = 5
+    count_factor = 1024.
     overlapped_patches = False
     debug_image = False
     debug_model = False
+    use_logits = args.use_logits
+    num_logits = 12 if use_logits else 0
     dataset = SealionDataset(
         args.data,
         processing_file=processed_file,
@@ -54,7 +61,8 @@ def main():
         patch_size=patch_size,
         patch_stride=patch_size[0] // 2 if overlapped_patches else patch_size[0],
         prescale=0.5,
-        per_image_norm=True)
+        per_image_norm=True,
+        num_logits=num_logits)
     sampler = IndexedPatchSampler(dataset)
     loader = data.DataLoader(
         dataset,
@@ -64,9 +72,11 @@ def main():
         sampler=sampler)
 
     if args.model == 'cnet':
-        model = ModelCnet(outplanes=num_outputs, target_size=patch_size, debug=debug_model)
+        model = ModelCnet(
+            outplanes=num_outputs, target_size=patch_size, debug=debug_model)
     elif args.model == 'countception' or args.model == 'cc':
-        model = ModelCountception(outplanes=num_outputs, debug=debug_model)
+        model = ModelCountception(
+            outplanes=num_outputs, use_logits=use_logits, logits_per_output=num_logits, debug=debug_model)
     else:
         assert False and "Invalid model"
 
@@ -98,7 +108,8 @@ def main():
             else:
                 input_var, target_var = autograd.Variable(input), autograd.Variable(target)
             output = model(input_var)
-            output = output.permute(0, 2, 3, 1) / 1024.
+            output = output.permute(0, 2, 3, 1) / count_factor
+            #FIXME handle logits
             if not overlapped_patches:
                 output = torch.squeeze(output.sum(dim=1))
                 output = torch.squeeze(output.sum(dim=1))
