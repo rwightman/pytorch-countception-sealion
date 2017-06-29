@@ -483,8 +483,9 @@ class SealionDataset(data.Dataset):
             #print(target_points)
             if self.target_type == 'countception':
                 dtype = np.uint8 if self.num_logits else np.float32
+                max_count = self.num_logits - 1 if self.num_logits else 0
                 target_tile = gen_target_countception(
-                    target_points, self.patch_size, max_count=self.num_logits, dtype=dtype)
+                    target_points, self.patch_size, max_count=max_count, dtype=dtype)
             else:
                 target_tile = gen_target_gauss(target_points, self.patch_size, factor=1024.)
 
