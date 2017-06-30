@@ -208,7 +208,7 @@ class SealionDataset(data.Dataset):
         assert target_type in TARGET_TYPES
         self.target_type = target_type
         self.num_logits = num_logits
-        if num_logits:
+        if train and num_logits:
             assert target_type == 'countception'
         self.generate_target = generate_target  # generate on the fly instead of loading
 

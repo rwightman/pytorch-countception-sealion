@@ -108,8 +108,10 @@ def main():
             else:
                 input_var, target_var = autograd.Variable(input), autograd.Variable(target)
             output = model(input_var)
+
+            if use_logits:
+                output = torch.cat([o.max(dim=1)[1] for o in output], dim=1).float()
             output = output.permute(0, 2, 3, 1) / count_factor
-            #FIXME handle logits
             if not overlapped_patches:
                 output = torch.squeeze(output.sum(dim=1))
                 output = torch.squeeze(output.sum(dim=1))
